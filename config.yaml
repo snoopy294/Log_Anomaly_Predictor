@@ -1,0 +1,183 @@
+# config.yaml
+# Configuration file for Anomaly Detection System
+
+# Model Configuration
+model:
+  architecture: "transformer"  # Options: transformer, lstm, gru
+  vocab_size: 5000
+  seq_len: 64
+  d_model: 128
+  num_layers: 4
+  num_heads: 8
+  d_ff: 512
+  dropout: 0.2
+  
+# Training Configuration
+training:
+  epochs: 20
+  batch_size: 256
+  learning_rate: 0.0001
+  weight_decay: 0.00001
+  label_smoothing: 0.1
+  early_stopping_patience: 5
+  reduce_lr_patience: 3
+  
+  # Data Split
+  split_mode: "time"  # Options: time, entity, time_entity
+  train_frac: 0.7
+  val_frac: 0.15
+  test_frac: 0.15
+  
+  # Tokenization
+  dst_top_n: 200
+  bytes_num_buckets: 8
+
+# Anomaly Detection Configuration
+anomaly_detection:
+  alert_z_thresh: 3.0
+  top_k_alerts: 300
+  max_alerts_per_entity: 10
+  allowlist_top_dst: 50
+  allowlist_margin: 1.5
+
+# API Configuration
+api:
+  host: "0.0.0.0"
+  port: 5000
+  debug: true
+  cors_enabled: true
+  max_buffer_size: 1000
+  
+# Paths Configuration
+paths:
+  model_dir: "models"
+  output_dir: "outputs"
+  data_dir: "data"
+  log_dir: "logs"
+  
+  # Model files
+  best_model: "models/log_transformer.keras"
+  model_meta: "models/log_transformer_meta.json"
+  entity_stats: "outputs/entity_stats.csv"
+  
+  # Training outputs
+  history_csv: "outputs/training_history.csv"
+  alerts_csv: "outputs/log_alerts.csv"
+  alert_packets_dir: "outputs/alert_packets"
+
+# Logging Configuration
+logging:
+  level: "INFO"  # Options: DEBUG, INFO, WARNING, ERROR, CRITICAL
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  file: "logs/anomaly_detection.log"
+
+# Feature Engineering
+features:
+  use_temporal_features: true
+  use_entity_features: true
+  use_cyclical_encoding: true
+  
+  temporal:
+    - hour_of_day
+    - day_of_week
+    - is_weekend
+    - is_business_hours
+  
+  entity:
+    - event_count
+    - unique_destinations
+    - average_bytes
+    - event_type_entropy
+
+# Visualization Configuration
+visualization:
+  plot_training_curves: true
+  plot_entity_timelines: true
+  plot_max_entities: 50
+  plot_nll_distribution: true
+  dpi: 150
+
+# Performance Optimization
+performance:
+  use_mixed_precision: false
+  use_xla: false
+  num_parallel_calls: 4
+  prefetch_buffer_size: 2
+  
+# Ensemble Configuration
+ensemble:
+  enabled: false
+  num_models: 3
+  seeds: [42, 123, 456]
+  aggregation_method: "mean"  # Options: mean, median, weighted
+
+# Alerts & Notifications
+alerts:
+  enabled: true
+  severity_levels:
+    high: 
+      threshold: 5.0
+      color: "#ff006e"
+    medium:
+      threshold: 3.5
+      color: "#ffd60a"
+    low:
+      threshold: 2.0
+      color: "#06ffa5"
+  
+  # Email notifications (optional)
+  email:
+    enabled: false
+    smtp_server: "smtp.gmail.com"
+    smtp_port: 587
+    sender: "your-email@gmail.com"
+    recipients: []
+    
+  # Slack notifications (optional)
+  slack:
+    enabled: false
+    webhook_url: ""
+    channel: "#security-alerts"
+
+# Monitoring & Metrics
+monitoring:
+  track_metrics: true
+  metrics_interval: 300  # seconds
+  store_predictions: true
+  max_stored_predictions: 10000
+  
+  # Performance metrics to track
+  track:
+    - accuracy
+    - precision
+    - recall
+    - f1_score
+    - false_positive_rate
+    - false_negative_rate
+    - inference_time
+    - memory_usage
+
+# Advanced Options
+advanced:
+  # Model checkpoint strategy
+  checkpoint:
+    save_frequency: 5  # epochs
+    keep_best_only: true
+    monitor: "val_loss"
+    
+  # Adversarial training
+  adversarial:
+    enabled: false
+    epsilon: 0.01
+    
+  # Transfer learning
+  transfer_learning:
+    enabled: false
+    pretrained_model: ""
+    freeze_layers: 0
+    
+  # Interpretability
+  interpretability:
+    compute_attention_weights: false
+    compute_gradients: false
+    save_attention_visualizations: false
