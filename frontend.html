@@ -1,0 +1,829 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Security Log Anomaly Detection System</title>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/recharts@2.5.0/dist/Recharts.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=IBM+Plex+Sans:wght@300;400;600;700&display=swap" rel="stylesheet">
+    
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        :root {
+            --bg-primary: #0a0e27;
+            --bg-secondary: #141936;
+            --bg-tertiary: #1e2547;
+            --bg-card: rgba(30, 37, 71, 0.6);
+            --accent-primary: #00f5ff;
+            --accent-secondary: #ff006e;
+            --accent-warning: #ffd60a;
+            --accent-success: #06ffa5;
+            --text-primary: #e8ecf3;
+            --text-secondary: #a8b2c1;
+            --text-muted: #6b7280;
+            --border-color: rgba(0, 245, 255, 0.1);
+            --shadow-glow: 0 0 30px rgba(0, 245, 255, 0.1);
+        }
+        
+        body {
+            font-family: 'IBM Plex Sans', sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            overflow-x: hidden;
+            position: relative;
+        }
+        
+        /* Animated background grid */
+        body::before {
+            content: '';
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-image: 
+                linear-gradient(rgba(0, 245, 255, 0.03) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(0, 245, 255, 0.03) 1px, transparent 1px);
+            background-size: 50px 50px;
+            animation: gridMove 20s linear infinite;
+            pointer-events: none;
+            z-index: 0;
+        }
+        
+        @keyframes gridMove {
+            0% { transform: translate(0, 0); }
+            100% { transform: translate(50px, 50px); }
+        }
+        
+        /* Gradient orbs */
+        .orb {
+            position: fixed;
+            border-radius: 50%;
+            filter: blur(80px);
+            opacity: 0.3;
+            pointer-events: none;
+            z-index: 0;
+        }
+        
+        .orb-1 {
+            width: 400px;
+            height: 400px;
+            background: radial-gradient(circle, var(--accent-primary), transparent);
+            top: -200px;
+            right: -200px;
+            animation: float 15s ease-in-out infinite;
+        }
+        
+        .orb-2 {
+            width: 300px;
+            height: 300px;
+            background: radial-gradient(circle, var(--accent-secondary), transparent);
+            bottom: -150px;
+            left: -150px;
+            animation: float 20s ease-in-out infinite reverse;
+        }
+        
+        @keyframes float {
+            0%, 100% { transform: translate(0, 0) scale(1); }
+            50% { transform: translate(50px, 50px) scale(1.1); }
+        }
+        
+        #root {
+            position: relative;
+            z-index: 1;
+        }
+        
+        .app-container {
+            min-height: 100vh;
+            padding: 20px;
+            max-width: 1800px;
+            margin: 0 auto;
+        }
+        
+        /* Header */
+        .header {
+            background: var(--bg-card);
+            backdrop-filter: blur(20px);
+            border: 1px solid var(--border-color);
+            border-radius: 20px;
+            padding: 30px 40px;
+            margin-bottom: 30px;
+            box-shadow: var(--shadow-glow);
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .header::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 2px;
+            background: linear-gradient(90deg, 
+                transparent, 
+                var(--accent-primary), 
+                var(--accent-secondary), 
+                transparent);
+            animation: shimmer 3s linear infinite;
+        }
+        
+        @keyframes shimmer {
+            0% { transform: translateX(-100%); }
+            100% { transform: translateX(100%); }
+        }
+        
+        .header h1 {
+            font-size: 2.5rem;
+            font-weight: 700;
+            background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            margin-bottom: 10px;
+            font-family: 'JetBrains Mono', monospace;
+            letter-spacing: -1px;
+        }
+        
+        .header-subtitle {
+            color: var(--text-secondary);
+            font-size: 1rem;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .status-indicator {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: var(--accent-success);
+            box-shadow: 0 0 20px var(--accent-success);
+            animation: pulse 2s ease-in-out infinite;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.6; transform: scale(1.2); }
+        }
+        
+        /* Control Panel */
+        .control-panel {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        
+        .control-card {
+            background: var(--bg-card);
+            backdrop-filter: blur(20px);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            padding: 25px;
+            transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .control-card:hover {
+            transform: translateY(-5px);
+            box-shadow: var(--shadow-glow);
+            border-color: var(--accent-primary);
+        }
+        
+        .control-card::before {
+            content: '';
+            position: absolute;
+            top: -50%;
+            left: -50%;
+            width: 200%;
+            height: 200%;
+            background: radial-gradient(circle, rgba(0, 245, 255, 0.1), transparent);
+            opacity: 0;
+            transition: opacity 0.3s ease;
+        }
+        
+        .control-card:hover::before {
+            opacity: 1;
+        }
+        
+        .control-label {
+            font-size: 0.875rem;
+            color: var(--text-secondary);
+            margin-bottom: 8px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            font-weight: 600;
+        }
+        
+        .control-input, .control-select {
+            width: 100%;
+            padding: 12px 16px;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            border-radius: 10px;
+            color: var(--text-primary);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.9rem;
+            transition: all 0.3s ease;
+        }
+        
+        .control-input:focus, .control-select:focus {
+            outline: none;
+            border-color: var(--accent-primary);
+            box-shadow: 0 0 20px rgba(0, 245, 255, 0.2);
+        }
+        
+        .btn {
+            padding: 14px 32px;
+            border: none;
+            border-radius: 12px;
+            font-weight: 600;
+            font-size: 1rem;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            position: relative;
+            overflow: hidden;
+            font-family: 'JetBrains Mono', monospace;
+        }
+        
+        .btn::before {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 0;
+            height: 0;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.3);
+            transform: translate(-50%, -50%);
+            transition: width 0.6s, height 0.6s;
+        }
+        
+        .btn:hover::before {
+            width: 300px;
+            height: 300px;
+        }
+        
+        .btn span {
+            position: relative;
+            z-index: 1;
+        }
+        
+        .btn-primary {
+            background: linear-gradient(135deg, var(--accent-primary), #0080ff);
+            color: var(--bg-primary);
+            box-shadow: 0 10px 30px rgba(0, 245, 255, 0.3);
+        }
+        
+        .btn-primary:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 15px 40px rgba(0, 245, 255, 0.5);
+        }
+        
+        .btn-secondary {
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+        }
+        
+        .btn-secondary:hover {
+            border-color: var(--accent-primary);
+            box-shadow: 0 0 20px rgba(0, 245, 255, 0.2);
+        }
+        
+        /* Stats Grid */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        
+        .stat-card {
+            background: var(--bg-card);
+            backdrop-filter: blur(20px);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            padding: 25px;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .stat-icon {
+            width: 50px;
+            height: 50px;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 24px;
+            margin-bottom: 15px;
+            position: relative;
+        }
+        
+        .stat-icon::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            border-radius: 12px;
+            padding: 2px;
+            background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
+            -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+            -webkit-mask-composite: xor;
+            mask-composite: exclude;
+        }
+        
+        .stat-value {
+            font-size: 2rem;
+            font-weight: 700;
+            color: var(--accent-primary);
+            font-family: 'JetBrains Mono', monospace;
+            margin-bottom: 5px;
+        }
+        
+        .stat-label {
+            font-size: 0.875rem;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        
+        /* Chart Container */
+        .chart-container {
+            background: var(--bg-card);
+            backdrop-filter: blur(20px);
+            border: 1px solid var(--border-color);
+            border-radius: 20px;
+            padding: 30px;
+            margin-bottom: 30px;
+            box-shadow: var(--shadow-glow);
+        }
+        
+        .chart-title {
+            font-size: 1.25rem;
+            font-weight: 600;
+            margin-bottom: 20px;
+            color: var(--text-primary);
+        }
+        
+        /* Alerts Table */
+        .alerts-container {
+            background: var(--bg-card);
+            backdrop-filter: blur(20px);
+            border: 1px solid var(--border-color);
+            border-radius: 20px;
+            padding: 30px;
+            box-shadow: var(--shadow-glow);
+        }
+        
+        .alerts-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+        
+        .alerts-title {
+            font-size: 1.5rem;
+            font-weight: 600;
+        }
+        
+        .alert-badge {
+            padding: 6px 16px;
+            border-radius: 20px;
+            font-size: 0.875rem;
+            font-weight: 600;
+            font-family: 'JetBrains Mono', monospace;
+        }
+        
+        .alert-badge.critical {
+            background: rgba(255, 0, 110, 0.2);
+            color: var(--accent-secondary);
+            border: 1px solid var(--accent-secondary);
+        }
+        
+        .alert-badge.warning {
+            background: rgba(255, 214, 10, 0.2);
+            color: var(--accent-warning);
+            border: 1px solid var(--accent-warning);
+        }
+        
+        .alert-badge.info {
+            background: rgba(0, 245, 255, 0.2);
+            color: var(--accent-primary);
+            border: 1px solid var(--accent-primary);
+        }
+        
+        .alerts-table {
+            width: 100%;
+            border-collapse: separate;
+            border-spacing: 0 10px;
+        }
+        
+        .alerts-table thead th {
+            text-align: left;
+            padding: 12px 16px;
+            color: var(--text-secondary);
+            font-size: 0.875rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            font-weight: 600;
+        }
+        
+        .alerts-table tbody tr {
+            background: var(--bg-tertiary);
+            border-radius: 12px;
+            transition: all 0.3s ease;
+        }
+        
+        .alerts-table tbody tr:hover {
+            background: var(--bg-secondary);
+            transform: scale(1.02);
+            box-shadow: 0 5px 20px rgba(0, 0, 0, 0.3);
+        }
+        
+        .alerts-table tbody td {
+            padding: 16px;
+            border-top: 1px solid transparent;
+            border-bottom: 1px solid transparent;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.9rem;
+        }
+        
+        .alerts-table tbody td:first-child {
+            border-left: 1px solid transparent;
+            border-top-left-radius: 12px;
+            border-bottom-left-radius: 12px;
+        }
+        
+        .alerts-table tbody td:last-child {
+            border-right: 1px solid transparent;
+            border-top-right-radius: 12px;
+            border-bottom-right-radius: 12px;
+        }
+        
+        .severity-indicator {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            display: inline-block;
+            margin-right: 8px;
+            box-shadow: 0 0 10px currentColor;
+        }
+        
+        .severity-high { background: var(--accent-secondary); }
+        .severity-medium { background: var(--accent-warning); }
+        .severity-low { background: var(--accent-success); }
+        
+        /* Loading State */
+        .loading {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 60px;
+        }
+        
+        .spinner {
+            width: 60px;
+            height: 60px;
+            border: 4px solid var(--bg-tertiary);
+            border-top: 4px solid var(--accent-primary);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        /* Responsive */
+        @media (max-width: 768px) {
+            .header h1 {
+                font-size: 1.75rem;
+            }
+            
+            .control-panel {
+                grid-template-columns: 1fr;
+            }
+            
+            .stats-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+            
+            .alerts-table {
+                font-size: 0.8rem;
+            }
+        }
+        
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar {
+            width: 10px;
+        }
+        
+        ::-webkit-scrollbar-track {
+            background: var(--bg-primary);
+        }
+        
+        ::-webkit-scrollbar-thumb {
+            background: var(--accent-primary);
+            border-radius: 5px;
+        }
+        
+        ::-webkit-scrollbar-thumb:hover {
+            background: var(--accent-secondary);
+        }
+    </style>
+</head>
+<body>
+    <div class="orb orb-1"></div>
+    <div class="orb orb-2"></div>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+        const { LineChart, Line, AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } = Recharts;
+
+        // Mock API calls - replace with actual backend
+        const mockAPI = {
+            async getStats() {
+                return {
+                    totalEvents: 145234,
+                    anomaliesDetected: 47,
+                    activeEntities: 1234,
+                    modelAccuracy: 94.7
+                };
+            },
+            
+            async getTimelineData() {
+                const now = Date.now();
+                return Array.from({ length: 24 }, (_, i) => ({
+                    time: new Date(now - (23 - i) * 3600000).toLocaleTimeString('en-US', { hour: '2-digit' }),
+                    events: Math.floor(Math.random() * 1000) + 500,
+                    anomalies: Math.floor(Math.random() * 10),
+                    nll: Math.random() * 5 + 1
+                }));
+            },
+            
+            async getAlerts() {
+                const entities = ['192.168.1.10', '10.0.0.25', '172.16.0.3', '192.168.1.100', '10.0.0.55'];
+                const eventTypes = ['TCP_EPHEMERAL', 'UDP_REGISTERED', 'TCP_WELL_KNOWN'];
+                const severities = ['high', 'medium', 'low'];
+                
+                return Array.from({ length: 10 }, (_, i) => ({
+                    id: i + 1,
+                    timestamp: new Date(Date.now() - Math.random() * 3600000).toISOString(),
+                    entity: entities[Math.floor(Math.random() * entities.length)],
+                    eventType: eventTypes[Math.floor(Math.random() * eventTypes.length)],
+                    score: (Math.random() * 5 + 3).toFixed(2),
+                    severity: severities[Math.floor(Math.random() * severities.length)],
+                    reason: 'Unusual destination pattern detected'
+                }));
+            },
+            
+            async trainModel(config) {
+                // Simulate training
+                return new Promise(resolve => {
+                    setTimeout(() => {
+                        resolve({ success: true, message: 'Model training started' });
+                    }, 1000);
+                });
+            }
+        };
+
+        function App() {
+            const [stats, setStats] = useState(null);
+            const [timelineData, setTimelineData] = useState([]);
+            const [alerts, setAlerts] = useState([]);
+            const [loading, setLoading] = useState(true);
+            const [activeView, setActiveView] = useState('dashboard');
+            
+            // Training config
+            const [trainConfig, setTrainConfig] = useState({
+                epochs: 20,
+                batchSize: 256,
+                learningRate: 0.0001,
+                seqLen: 64
+            });
+
+            useEffect(() => {
+                loadData();
+                const interval = setInterval(loadData, 30000); // Refresh every 30s
+                return () => clearInterval(interval);
+            }, []);
+
+            const loadData = async () => {
+                try {
+                    const [statsData, timeline, alertsData] = await Promise.all([
+                        mockAPI.getStats(),
+                        mockAPI.getTimelineData(),
+                        mockAPI.getAlerts()
+                    ]);
+                    
+                    setStats(statsData);
+                    setTimelineData(timeline);
+                    setAlerts(alertsData);
+                    setLoading(false);
+                } catch (error) {
+                    console.error('Error loading data:', error);
+                    setLoading(false);
+                }
+            };
+
+            const handleTrain = async () => {
+                const result = await mockAPI.trainModel(trainConfig);
+                alert(result.message);
+            };
+
+            if (loading) {
+                return (
+                    <div className="app-container">
+                        <div className="loading">
+                            <div className="spinner"></div>
+                        </div>
+                    </div>
+                );
+            }
+
+            return (
+                <div className="app-container">
+                    <header className="header">
+                        <h1>⚡ ANOMALY DETECTION SYSTEM</h1>
+                        <div className="header-subtitle">
+                            <div className="status-indicator"></div>
+                            <span>Real-time monitoring active • Last updated: {new Date().toLocaleTimeString()}</span>
+                        </div>
+                    </header>
+
+                    {/* Stats Grid */}
+                    <div className="stats-grid">
+                        <div className="stat-card">
+                            <div className="stat-icon">📊</div>
+                            <div className="stat-value">{stats.totalEvents.toLocaleString()}</div>
+                            <div className="stat-label">Total Events</div>
+                        </div>
+                        <div className="stat-card">
+                            <div className="stat-icon">🚨</div>
+                            <div className="stat-value">{stats.anomaliesDetected}</div>
+                            <div className="stat-label">Anomalies Detected</div>
+                        </div>
+                        <div className="stat-card">
+                            <div className="stat-icon">👥</div>
+                            <div className="stat-value">{stats.activeEntities.toLocaleString()}</div>
+                            <div className="stat-label">Active Entities</div>
+                        </div>
+                        <div className="stat-card">
+                            <div className="stat-icon">🎯</div>
+                            <div className="stat-value">{stats.modelAccuracy}%</div>
+                            <div className="stat-label">Model Accuracy</div>
+                        </div>
+                    </div>
+
+                    {/* Control Panel */}
+                    <div className="control-panel">
+                        <div className="control-card">
+                            <div className="control-label">Epochs</div>
+                            <input 
+                                type="number" 
+                                className="control-input"
+                                value={trainConfig.epochs}
+                                onChange={e => setTrainConfig({...trainConfig, epochs: parseInt(e.target.value)})}
+                            />
+                        </div>
+                        <div className="control-card">
+                            <div className="control-label">Batch Size</div>
+                            <input 
+                                type="number" 
+                                className="control-input"
+                                value={trainConfig.batchSize}
+                                onChange={e => setTrainConfig({...trainConfig, batchSize: parseInt(e.target.value)})}
+                            />
+                        </div>
+                        <div className="control-card">
+                            <div className="control-label">Learning Rate</div>
+                            <input 
+                                type="number" 
+                                step="0.00001"
+                                className="control-input"
+                                value={trainConfig.learningRate}
+                                onChange={e => setTrainConfig({...trainConfig, learningRate: parseFloat(e.target.value)})}
+                            />
+                        </div>
+                        <div className="control-card">
+                            <button className="btn btn-primary" onClick={handleTrain}>
+                                <span>🚀 Train Model</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    {/* Timeline Chart */}
+                    <div className="chart-container">
+                        <h3 className="chart-title">Event Timeline (24h)</h3>
+                        <ResponsiveContainer width="100%" height={300}>
+                            <AreaChart data={timelineData}>
+                                <defs>
+                                    <linearGradient id="colorEvents" x1="0" y1="0" x2="0" y2="1">
+                                        <stop offset="5%" stopColor="#00f5ff" stopOpacity={0.8}/>
+                                        <stop offset="95%" stopColor="#00f5ff" stopOpacity={0}/>
+                                    </linearGradient>
+                                    <linearGradient id="colorAnomalies" x1="0" y1="0" x2="0" y2="1">
+                                        <stop offset="5%" stopColor="#ff006e" stopOpacity={0.8}/>
+                                        <stop offset="95%" stopColor="#ff006e" stopOpacity={0}/>
+                                    </linearGradient>
+                                </defs>
+                                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
+                                <XAxis dataKey="time" stroke="#a8b2c1" />
+                                <YAxis stroke="#a8b2c1" />
+                                <Tooltip 
+                                    contentStyle={{
+                                        backgroundColor: '#1e2547',
+                                        border: '1px solid rgba(0, 245, 255, 0.3)',
+                                        borderRadius: '10px',
+                                        color: '#e8ecf3'
+                                    }}
+                                />
+                                <Legend />
+                                <Area type="monotone" dataKey="events" stroke="#00f5ff" fillOpacity={1} fill="url(#colorEvents)" />
+                                <Area type="monotone" dataKey="anomalies" stroke="#ff006e" fillOpacity={1} fill="url(#colorAnomalies)" />
+                            </AreaChart>
+                        </ResponsiveContainer>
+                    </div>
+
+                    {/* NLL Distribution */}
+                    <div className="chart-container">
+                        <h3 className="chart-title">NLL Distribution</h3>
+                        <ResponsiveContainer width="100%" height={250}>
+                            <BarChart data={timelineData}>
+                                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
+                                <XAxis dataKey="time" stroke="#a8b2c1" />
+                                <YAxis stroke="#a8b2c1" />
+                                <Tooltip 
+                                    contentStyle={{
+                                        backgroundColor: '#1e2547',
+                                        border: '1px solid rgba(0, 245, 255, 0.3)',
+                                        borderRadius: '10px',
+                                        color: '#e8ecf3'
+                                    }}
+                                />
+                                <Bar dataKey="nll" fill="#00f5ff" radius={[8, 8, 0, 0]} />
+                            </BarChart>
+                        </ResponsiveContainer>
+                    </div>
+
+                    {/* Alerts Table */}
+                    <div className="alerts-container">
+                        <div className="alerts-header">
+                            <h2 className="alerts-title">Recent Alerts</h2>
+                            <span className="alert-badge critical">{alerts.filter(a => a.severity === 'high').length} Critical</span>
+                        </div>
+                        
+                        <table className="alerts-table">
+                            <thead>
+                                <tr>
+                                    <th>Timestamp</th>
+                                    <th>Entity</th>
+                                    <th>Event Type</th>
+                                    <th>Score</th>
+                                    <th>Severity</th>
+                                    <th>Reason</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {alerts.map(alert => (
+                                    <tr key={alert.id}>
+                                        <td>{new Date(alert.timestamp).toLocaleTimeString()}</td>
+                                        <td>{alert.entity}</td>
+                                        <td>{alert.eventType}</td>
+                                        <td>{alert.score}</td>
+                                        <td>
+                                            <span className={`severity-indicator severity-${alert.severity}`}></span>
+                                            {alert.severity}
+                                        </td>
+                                        <td>{alert.reason}</td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            );
+        }
+
+        ReactDOM.render(<App />, document.getElementById('root'));
+    </script>
+</body>
+</html>
