@@ -10,7 +10,7 @@ import os
 import json
 import numpy as np
 import pandas as pd
-from flask import Flask, request, jsonify, send_file
+from flask import Flask, request, jsonify, send_file, Response
 from flask_cors import CORS
 import tensorflow as tf
 from tensorflow import keras
@@ -19,6 +19,20 @@ import threading
 import queue
 from typing import Dict, List, Optional
 import pickle
+import sys
+
+# Import training pipeline from new.py and improved model from model.py
+from new import (
+    load_and_adapt_events, filter_entities,
+    split_time_within_groups, fit_dst_vocab, fit_bytes_bins,
+    make_token_strings, build_vocab_from_buckets,
+    make_sequences_from_events, build_transformer_next_event_model,
+)
+from model import (
+    build_improved_transformer_model,
+    compute_attention_rollout,
+    get_important_events
+)
 
 app = Flask(__name__)
 CORS(app)  # Enable CORS for React frontend
@@ -32,6 +46,16 @@ ENTITY_STATS = None
 EVENT_BUFFER = {}  # Store recent events per entity
 ALERT_QUEUE = queue.Queue()
 
+# Training state — tracks real accuracy from training
+TRAINING_STATE = {
+    "is_training": False,
+    "progress": "",
+    "accuracy": 0.0,
+    "top5_accuracy": 0.0,
+    "last_trained": None,
+    "error": None,
+}
+
 # Configuration
 CONFIG = {
     "model_path": "models/log_transformer.keras",
@@ -41,6 +65,15 @@ CONFIG = {
     "alert_threshold": 3.0,
 }
 
+
+# ============================================
+# CUSTOM LAYERS
+# ============================================
+
+@keras.utils.register_keras_serializable()
+class TakeLastToken(keras.layers.Layer):
+    def call(self, x):
+        return x[:, -1, :]
 
 # ============================================
 # INITIALIZATION
@@ -53,16 +86,16 @@ def load_model_and_config():
     try:
         if os.path.exists(CONFIG["model_path"]):
             MODEL = keras.models.load_model(CONFIG["model_path"])
-            print(f"✓ Model loaded from {CONFIG['model_path']}")
+            print(f"+ Model loaded from {CONFIG['model_path']}")
         
         if os.path.exists(CONFIG["meta_path"]):
             with open(CONFIG["meta_path"], 'r') as f:
                 MODEL_META = json.load(f)
-            print(f"✓ Metadata loaded")
+            print(f"+ Metadata loaded")
         
         if os.path.exists(CONFIG["stats_path"]):
             ENTITY_STATS = pd.read_csv(CONFIG["stats_path"])
-            print(f"✓ Entity stats loaded")
+            print(f"+ Entity stats loaded")
         
         # Build vocab and tokenizer from meta
         if MODEL_META:
@@ -72,10 +105,10 @@ def load_model_and_config():
             TOKENIZER = {v: i + 2 for i, v in enumerate(VOCAB)}
             TOKENIZER["PAD"] = 0
             TOKENIZER["UNK"] = 1
-            print(f"✓ Tokenizer initialized with {len(TOKENIZER)} tokens")
+            print(f"+ Tokenizer initialized with {len(TOKENIZER)} tokens")
             
     except Exception as e:
-        print(f"✗ Error loading model: {e}")
+        print(f"! Error loading model: {e}")
 
 
 # ============================================
@@ -103,6 +136,15 @@ def get_entity_buffer(entity_id: str) -> List[Dict]:
 
 def add_event_to_buffer(entity_id: str, event: Dict):
     """Add event to entity buffer"""
+    # Ensure initialized
+    if TOKENIZER is None:
+        load_model_and_config()
+        
+    if TOKENIZER is None:
+        # Fallback if still failed
+        print("Warning: Tokenizer not initialized, skipping event ingest")
+        return
+
     buffer = get_entity_buffer(entity_id)
     buffer.append({
         "timestamp": event.get("timestamp", datetime.now().isoformat()),
@@ -245,8 +287,8 @@ def get_stats():
     
     anomalies_detected = len(alerts)
     
-    # Model accuracy (mock for now - would need validation set)
-    model_accuracy = 94.7 if MODEL is not None else 0.0
+    # Use real accuracy from training (0.0 if never trained)
+    model_accuracy = TRAINING_STATE["accuracy"]
     
     return jsonify({
         "totalEvents": total_events,
@@ -380,23 +422,311 @@ def get_timeline():
     return jsonify(timeline)
 
 
+def run_r_cicids_adapter(in_csv, out_csv):
+    """Run cicids_into_clean.R to convert CICIDS format to clean format"""
+    import subprocess
+    r_script = os.path.join(os.path.dirname(__file__), "cicids_into_clean.R")
+    if not os.path.exists(r_script):
+        raise FileNotFoundError(f"R adapter script not found: {r_script}")
+    
+    # Try Rscript from PATH
+    rscript_bin = "Rscript"
+    cmd = [rscript_bin, r_script, "--in_csv", in_csv, "--out_csv", out_csv, "--verbose"]
+    
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+    if result.returncode != 0:
+        raise RuntimeError(f"R script failed (exit {result.returncode}):\n{result.stderr}")
+    
+    if not os.path.exists(out_csv):
+        raise RuntimeError(f"R script ran but output file not created: {out_csv}")
+    
+    print(f"R adapter output: {result.stdout}")
+    return out_csv
+
+
+def detect_csv_format(csv_path):
+    """Detect if a CSV is CICIDS raw format or clean format"""
+    df_peek = pd.read_csv(csv_path, nrows=3)
+    # Strip whitespace from column names (CICIDS files often have leading spaces)
+    cols = set(c.strip() for c in df_peek.columns)
+    
+    if {"timestamp", "entity_id", "event_type"}.issubset(cols):
+        return "clean"
+    if {"Timestamp", "Source IP", "Destination IP", "Destination Port", "Protocol"}.issubset(cols):
+        return "cicids"
+    return "unknown"
+
+
 @app.route('/api/train', methods=['POST'])
 def train_model():
-    """Trigger model training"""
+    """Trigger model training in background thread"""
+    global TRAINING_STATE
+    
+    if TRAINING_STATE["is_training"]:
+        return jsonify({"success": False, "message": "Training already in progress"}), 409
+    
     try:
-        config = request.json
+        config = request.json or {}
+        epochs = config.get("epochs", 2)
+        batch_size = config.get("batchSize", 32)
+        learning_rate = config.get("learningRate", 0.0001)
         
-        # In practice, this would trigger async training
-        # For now, just return success
+        def run_training():
+            global MODEL, MODEL_META, TRAINING_STATE
+            try:
+                TRAINING_STATE["is_training"] = True
+                TRAINING_STATE["error"] = None
+                TRAINING_STATE["progress"] = "Loading data..."
+                
+                train_csv = os.path.join(os.path.dirname(__file__), "data", "train_data.csv")
+                if not os.path.exists(train_csv):
+                    raise FileNotFoundError(f"Training data not found: {train_csv}")
+                
+                # Auto-detect format: if CICIDS, run R adapter first
+                fmt = detect_csv_format(train_csv)
+                
+                if fmt == "cicids":
+                    TRAINING_STATE["progress"] = "Running cicids_into_clean.R to preprocess CICIDS data..."
+                    clean_csv = os.path.join(os.path.dirname(__file__), "data", "train_data_clean.csv")
+                    run_r_cicids_adapter(train_csv, clean_csv)
+                    train_csv = clean_csv
+                    fmt = "clean"
+                elif fmt == "unknown":
+                    raise ValueError(
+                        "Unrecognized CSV format. Expected either:\n"
+                        "  • CICIDS format (Timestamp, Source IP, Destination IP, Destination Port, Protocol)\n"
+                        "  • Clean format (timestamp, entity_id, event_type, dst_id, bytes, Label)\n"
+                        "Only CICIDS datasets or datasets in that format are supported."
+                    )
+                
+                TRAINING_STATE["progress"] = "Loading clean data..."
+                
+                # Load and adapt events
+                df = load_and_adapt_events(train_csv, fmt="clean")
+                df = filter_entities(df, min_events_per_entity=10)
+                if len(df) == 0:
+                    raise RuntimeError("No data after filtering entities.")
+                
+                TRAINING_STATE["progress"] = "Splitting data..."
+                
+                # Split train/val (70/15/15)
+                df_tr, df_va, df_te = split_time_within_groups(df, 0.7, 0.15)
+                
+                # Fit tokenization on train only
+                dst_keep = fit_dst_vocab(df_tr, top_n=200)
+                bytes_edges = fit_bytes_bins(df_tr, num_buckets=8)
+                
+                # Token strings
+                for d in (df_tr, df_va, df_te):
+                    d["token_str"] = make_token_strings(d, dst_keep, bytes_edges)
+                
+                df_tr = df_tr.sort_values(["entity_id", "timestamp"]).reset_index(drop=True)
+                df_va = df_va.sort_values(["entity_id", "timestamp"]).reset_index(drop=True)
+                
+                # Build vocab
+                vocab, tok_map, _ = build_vocab_from_buckets(dst_keep, bytes_edges)
+                vocab_size = len(vocab) + 2  # PAD=0, UNK=1
+                seq_len = 10
+                
+                TRAINING_STATE["progress"] = "Building sequences..."
+                
+                # Build sequences
+                Xtr, ytr, *_ = make_sequences_from_events(df_tr, tok_map, seq_len, step=1)
+                Xva, yva, *_ = make_sequences_from_events(df_va, tok_map, seq_len, step=1)
+                
+                if len(Xtr) == 0 or len(Xva) == 0:
+                    raise RuntimeError("Not enough sequences for training. Need more data.")
+                
+                TRAINING_STATE["progress"] = "Building model..."
+                
+                # Build and train model using improved architecture
+                model = build_improved_transformer_model(
+                    vocab_size=vocab_size,
+                    seq_len=seq_len,
+                    d_model=128,
+                    num_layers=4,
+                    num_heads=8,
+                    lr=learning_rate,
+                )
+                
+                # Prepare datasets
+                def to_onehot(x, y):
+                    return x, tf.one_hot(y, depth=vocab_size)
+                
+                ds_tr = (tf.data.Dataset.from_tensor_slices((Xtr, ytr))
+                         .shuffle(min(50000, len(Xtr)))
+                         .batch(batch_size)
+                         .map(to_onehot, num_parallel_calls=tf.data.AUTOTUNE)
+                         .prefetch(tf.data.AUTOTUNE))
+                
+                ds_va = (tf.data.Dataset.from_tensor_slices((Xva, yva))
+                         .batch(batch_size)
+                         .map(to_onehot, num_parallel_calls=tf.data.AUTOTUNE)
+                         .prefetch(tf.data.AUTOTUNE))
+                
+                # Custom callback to update progress
+                class ProgressCallback(keras.callbacks.Callback):
+                    def on_epoch_end(self, epoch, logs=None):
+                        acc = logs.get("val_acc", 0) * 100
+                        TRAINING_STATE["progress"] = f"Epoch {epoch + 1}/{epochs} — val_acc: {acc:.1f}%"
+                
+                TRAINING_STATE["progress"] = f"Training epoch 1/{epochs}..."
+                
+                model_path = os.path.join(os.path.dirname(__file__), "models", "log_transformer.keras")
+                callbacks = [
+                    keras.callbacks.ModelCheckpoint(model_path, monitor="val_loss", save_best_only=True),
+                    ProgressCallback(),
+                ]
+                
+                history = model.fit(ds_tr, validation_data=ds_va, epochs=epochs, callbacks=callbacks, verbose=1)
+                
+                # Get final validation metrics
+                val_acc = history.history.get("val_acc", [0])[-1] * 100
+                val_top5 = history.history.get("val_top5_acc", [0])[-1] * 100
+                
+                # Reload best model
+                MODEL = keras.models.load_model(model_path)
+                
+                # Update training state with real accuracy
+                TRAINING_STATE["accuracy"] = round(val_acc, 1)
+                TRAINING_STATE["top5_accuracy"] = round(val_top5, 1)
+                TRAINING_STATE["last_trained"] = datetime.now().isoformat()
+                TRAINING_STATE["progress"] = f"Complete — accuracy: {val_acc:.1f}%"
+                TRAINING_STATE["is_training"] = False
+                
+                print(f"Training complete. Val accuracy: {val_acc:.1f}%, Top-5: {val_top5:.1f}%")
+                
+            except Exception as e:
+                TRAINING_STATE["is_training"] = False
+                TRAINING_STATE["error"] = str(e)
+                TRAINING_STATE["progress"] = f"Error: {str(e)}"
+                print(f"Training error: {e}", file=sys.stderr)
+        
+        thread = threading.Thread(target=run_training, daemon=True)
+        thread.start()
+        
         return jsonify({
             "success": True,
             "message": "Model training started",
-            "config": config,
+            "config": {"epochs": epochs, "batchSize": batch_size, "learningRate": learning_rate},
             "timestamp": datetime.now().isoformat()
         })
         
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/explain', methods=['POST'])
+def explain_anomaly():
+    """Explain why a sequence is considered anomalous"""
+    try:
+        data = request.json
+        entity_id = data.get("entity_id")
+        
+        if not entity_id:
+            return jsonify({"error": "entity_id is required"}), 400
+            
+        buffer = get_entity_buffer(entity_id)
+        seq_len = MODEL_META.get("seq_len", 64)
+        
+        if len(buffer) < seq_len:
+            return jsonify({"error": "Insufficient data for explanation"}), 400
+            
+        # Get last sequence
+        recent = buffer[-seq_len:]
+        X = np.array([e["token_id"] for e in recent], dtype=np.int32).reshape(1, -1)
+        
+        # Get attention weights or important events
+        importance = get_important_events(MODEL, X, seq_idx=0)
+        
+        # Prepare tokens for frontend
+        tokens = []
+        for i, (e, imp) in enumerate(zip(recent, importance)):
+            tokens.append({
+                "index": i,
+                "token_id": int(e["token_id"]),
+                "token_str": VOCAB[e["token_id"] - 2] if 2 <= e["token_id"] < len(VOCAB) + 2 else "UNK",
+                "importance": float(imp),
+                "timestamp": e["timestamp"]
+            })
+            
+        return jsonify({
+            "entity_id": entity_id,
+            "tokens": tokens,
+            "timestamp": datetime.now().isoformat()
+        })
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/train/status', methods=['GET'])
+def train_status():
+    """Get current training status"""
+    return jsonify({
+        "is_training": TRAINING_STATE["is_training"],
+        "progress": TRAINING_STATE["progress"],
+        "accuracy": TRAINING_STATE["accuracy"],
+        "top5_accuracy": TRAINING_STATE["top5_accuracy"],
+        "last_trained": TRAINING_STATE["last_trained"],
+        "error": TRAINING_STATE["error"],
+    })
+
+
+@app.route('/api/upload_csv', methods=['POST'])
+def upload_csv():
+    """Upload a CSV file for training. Accepts CICIDS or clean format.
+    CICIDS files are auto-converted via cicids_into_clean.R."""
+    if 'file' not in request.files:
+        return jsonify({"success": False, "error": "No file provided"}), 400
+    
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({"success": False, "error": "No file selected"}), 400
+    
+    try:
+        data_dir = os.path.join(os.path.dirname(__file__), "data")
+        os.makedirs(data_dir, exist_ok=True)
+        
+        # Save the uploaded file
+        upload_path = os.path.join(data_dir, "uploaded_raw.csv")
+        file.save(upload_path)
+        
+        # Detect format
+        fmt = detect_csv_format(upload_path)
+        
+        if fmt == "cicids":
+            # Run R adapter to convert to clean format
+            clean_path = os.path.join(data_dir, "train_data.csv")
+            run_r_cicids_adapter(upload_path, clean_path)
+            row_count = sum(1 for _ in open(clean_path)) - 1
+            
+            return jsonify({
+                "success": True,
+                "message": f"CICIDS dataset preprocessed with cicids_into_clean.R and saved ({row_count} rows). Ready to train!",
+                "format": "cicids",
+                "rows": row_count,
+            })
+        elif fmt == "clean":
+            import shutil
+            train_path = os.path.join(data_dir, "train_data.csv")
+            shutil.copy2(upload_path, train_path)
+            row_count = sum(1 for _ in open(train_path)) - 1
+            
+            return jsonify({
+                "success": True,
+                "message": f"Clean-format CSV saved ({row_count} rows). Ready to train!",
+                "format": "clean",
+                "rows": row_count,
+            })
+        else:
+            return jsonify({
+                "success": False,
+                "error": "Unrecognized CSV format. Only CICIDS datasets (Timestamp, Source IP, Destination IP, Destination Port, Protocol) or clean format (timestamp, entity_id, event_type) are supported."
+            }), 400
+            
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
 
 
 @app.route('/api/model/info', methods=['GET'])
@@ -445,14 +775,28 @@ def get_entity_info(entity_id: str):
     })
 
 
+
+
 # ============================================
 # SERVE DASHBOARD
 # ============================================
 
+@app.route('/assets/<path:filename>')
+def serve_static(filename):
+    """Serve static files"""
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    filepath = os.path.join(base_dir, filename)
+    if not os.path.isfile(filepath):
+        return 'File not found: ' + filepath, 404
+    with open(filepath, 'r', encoding='utf-8') as f:
+        content = f.read()
+    mime = 'application/javascript' if filename.endswith('.js') else 'text/plain'
+    return Response(content, mimetype=mime)
+
 @app.route('/')
 def serve_dashboard():
     """Serve the React dashboard"""
-    return send_file('anomaly_dashboard.html')
+    return send_file('frontend.html')
 
 
 # ============================================
@@ -461,15 +805,15 @@ def serve_dashboard():
 
 if __name__ == '__main__':
     print("=" * 60)
-    print("🚀 Starting Anomaly Detection API Server")
+    print("Starting Anomaly Detection API Server")
     print("=" * 60)
     
     # Load model
     load_model_and_config()
     
-    print("\n✓ Server ready!")
-    print(f"✓ Dashboard: http://localhost:5000")
-    print(f"✓ API: http://localhost:5000/api/health")
+    print("\n+ Server ready!")
+    print(f"+ Dashboard: http://localhost:5000")
+    print(f"+ API: http://localhost:5000/api/health")
     print("\n" + "=" * 60)
     
     # Run Flask app

@@ -1,0 +1,29 @@
+{
+  "train": {
+    "n_events": 1000,
+    "n_entities": 9,
+    "n_sequences": 606
+  },
+  "val": {
+    "loss": 7.001555442810059,
+    "acc": 0.0,
+    "top5_acc": 0.0,
+    "baseline_last_token_acc": 0.0,
+    "perplexity": 1094.4376220703125,
+    "mean_nll": 6.997995853424072,
+    "p95_nll": 7.389636516571045,
+    "n_sequences": 56
+  },
+  "internal_test": {
+    "loss": 6.945919990539551,
+    "acc": 0.0,
+    "top5_acc": 0.014705882407724857,
+    "baseline_last_token_acc": 0.0,
+    "perplexity": 1032.27587890625,
+    "mean_nll": 6.939521312713623,
+    "p95_nll": 7.356389999389648,
+    "n_sequences": 68
+  },
+  "external_test": null,
+  "external_test_unk_rate": null
+}
