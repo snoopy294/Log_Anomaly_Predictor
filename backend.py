@@ -8,6 +8,7 @@ Connects the React dashboard with the TensorFlow model.
 
 import os
 import json
+import time
 import numpy as np
 import pandas as pd
 from flask import Flask, request, jsonify, send_file, Response
@@ -54,6 +55,14 @@ TRAINING_STATE = {
     "top5_accuracy": 0.0,
     "last_trained": None,
     "error": None,
+}
+
+# Performance tracking
+PREVIOUS_STATS = {"totalEvents": 0, "anomaliesDetected": 0, "activeEntities": 0}
+PERFORMANCE_METRICS = {
+    "inference_latency_samples": [],  # last N latency measurements in ms
+    "total_events_scored": 0,
+    "anomalies_flagged": 0,
 }
 
 # Configuration
@@ -172,8 +181,14 @@ def predict_next_event(entity_id: str, return_top_k: int = 5) -> Optional[Dict]:
     recent = buffer[-seq_len:]
     X = np.array([e["token_id"] for e in recent], dtype=np.int32).reshape(1, -1)
     
-    # Predict
+    # Predict with latency tracking
+    t0 = time.perf_counter()
     probs = MODEL.predict(X, verbose=0)[0]
+    latency_ms = (time.perf_counter() - t0) * 1000
+    PERFORMANCE_METRICS["inference_latency_samples"].append(latency_ms)
+    # Keep only last 100 samples
+    if len(PERFORMANCE_METRICS["inference_latency_samples"]) > 100:
+        PERFORMANCE_METRICS["inference_latency_samples"] = PERFORMANCE_METRICS["inference_latency_samples"][-100:]
     
     # Get top-k
     top_indices = np.argsort(probs)[-return_top_k:][::-1]
@@ -219,8 +234,14 @@ def compute_anomaly_score(entity_id: str, actual_event: Dict) -> Optional[Dict]:
     recent = buffer[-seq_len:]
     X = np.array([e["token_id"] for e in recent], dtype=np.int32).reshape(1, -1)
     
-    # Predict
+    # Predict with latency tracking
+    t0 = time.perf_counter()
     probs = MODEL.predict(X, verbose=0)[0]
+    latency_ms = (time.perf_counter() - t0) * 1000
+    PERFORMANCE_METRICS["inference_latency_samples"].append(latency_ms)
+    if len(PERFORMANCE_METRICS["inference_latency_samples"]) > 100:
+        PERFORMANCE_METRICS["inference_latency_samples"] = PERFORMANCE_METRICS["inference_latency_samples"][-100:]
+    PERFORMANCE_METRICS["total_events_scored"] += 1
     
     # Get actual token ID
     actual_token = tokenize_event(actual_event)
@@ -252,6 +273,7 @@ def compute_anomaly_score(entity_id: str, actual_event: Dict) -> Optional[Dict]:
     # Add to alert queue if anomaly
     if is_anomaly:
         ALERT_QUEUE.put(result)
+        PERFORMANCE_METRICS["anomalies_flagged"] += 1
     
     return result
 
@@ -273,6 +295,8 @@ def health_check():
 @app.route('/api/stats', methods=['GET'])
 def get_stats():
     """Get system statistics"""
+    global PREVIOUS_STATS
+    
     total_events = sum(len(buffer) for buffer in EVENT_BUFFER.values())
     active_entities = len(EVENT_BUFFER)
     
@@ -290,11 +314,56 @@ def get_stats():
     # Use real accuracy from training (0.0 if never trained)
     model_accuracy = TRAINING_STATE["accuracy"]
     
+    # Compute trends (% change from previous snapshot)
+    def calc_trend(current, previous):
+        if previous == 0:
+            return 0.0 if current == 0 else 100.0
+        return round(((current - previous) / previous) * 100, 1)
+    
+    events_trend = calc_trend(total_events, PREVIOUS_STATS["totalEvents"])
+    anomalies_trend = calc_trend(anomalies_detected, PREVIOUS_STATS["anomaliesDetected"])
+    entities_trend = calc_trend(active_entities, PREVIOUS_STATS["activeEntities"])
+    
+    # Update previous stats for next comparison
+    PREVIOUS_STATS = {
+        "totalEvents": total_events,
+        "anomaliesDetected": anomalies_detected,
+        "activeEntities": active_entities,
+    }
+    
+    # Compute average inference latency
+    latency_samples = PERFORMANCE_METRICS["inference_latency_samples"]
+    avg_latency_ms = round(sum(latency_samples) / len(latency_samples), 1) if latency_samples else 0.0
+    
+    # Compute anomaly rate (proxy for false positive rate without ground truth)
+    total_scored = PERFORMANCE_METRICS["total_events_scored"]
+    anomaly_rate = round((PERFORMANCE_METRICS["anomalies_flagged"] / total_scored) * 100, 2) if total_scored > 0 else 0.0
+    
+    # Get model engine name from metadata
+    engine_name = "No Model Loaded"
+    if MODEL is not None and MODEL_META is not None:
+        engine_name = MODEL_META.get("architecture", MODEL.name or "transformer").upper()
+    elif MODEL is not None:
+        engine_name = (MODEL.name or "transformer").upper()
+    
+    # Sequence length from metadata
+    seq_len = MODEL_META.get("seq_len", 0) if MODEL_META else 0
+    
     return jsonify({
         "totalEvents": total_events,
         "anomaliesDetected": anomalies_detected,
         "activeEntities": active_entities,
         "modelAccuracy": model_accuracy,
+        "eventsTrend": events_trend,
+        "anomaliesTrend": anomalies_trend,
+        "entitiesTrend": entities_trend,
+        "inferenceLatencyMs": avg_latency_ms,
+        "anomalyRate": anomaly_rate,
+        "engineName": engine_name,
+        "seqLen": seq_len,
+        "alertThreshold": CONFIG["alert_threshold"],
+        "maxBufferSize": CONFIG["max_buffer_size"],
+        "modelLoaded": MODEL is not None,
         "timestamp": datetime.now().isoformat()
     })
 
@@ -414,9 +483,9 @@ def get_timeline():
         
         timeline.append({
             "time": time_point.strftime("%H:00"),
-            "events": events_count if events_count > 0 else np.random.randint(500, 1500),
-            "anomalies": anomalies_count if anomalies_count > 0 else np.random.randint(0, 20),
-            "nll": np.random.random() * 5 + 1
+            "events": events_count,
+            "anomalies": anomalies_count,
+            "nll": 0.0
         })
     
     return jsonify(timeline)

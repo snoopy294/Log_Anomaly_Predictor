@@ -573,7 +573,7 @@
             </div>
         );
 
-        const SidebarNav = ({ activeTab, onTabChange }) => (
+        const SidebarNav = ({ activeTab, onTabChange, apiStatus }) => (
             <div className="sidebar">
                 <div className="logo">
                     <Icon name="shield-check" size={28} />
@@ -600,8 +600,8 @@
                 <div style={{ marginTop: 'auto', padding: '20px', background: 'rgba(255,255,255,0.02)', borderRadius: '16px' }}>
                     <div style={{ fontSize: '0.8rem', color: 'var(--text-dim)', marginBottom: '4px' }}>API STATUS</div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.9rem' }}>
-                        <div style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--success)', boxShadow: '0 0 10px var(--success)' }}></div>
-                        Connected
+                        <div style={{ width: 8, height: 8, borderRadius: '50%', background: apiStatus ? 'var(--success)' : 'var(--accent)', boxShadow: apiStatus ? '0 0 10px var(--success)' : '0 0 10px var(--accent)' }}></div>
+                        {apiStatus ? 'Connected' : 'Disconnected'}
                     </div>
                 </div>
             </div>
@@ -714,7 +714,7 @@
                     </div>
                     <div className="input-group">
                         <label>Sequence length</label>
-                        <input type="number" value={64} disabled />
+                        <input type="number" value={stats.seqLen || 0} disabled />
                     </div>
                 </div>
 
@@ -820,12 +820,13 @@
         function App() {
             useIcons();
             const [activeTab, setActiveTab] = useState('overview');
-            const [stats, setStats] = useState({ totalEvents: 0, anomaliesDetected: 0, activeEntities: 0, modelAccuracy: 0, last_trained: null });
+            const [stats, setStats] = useState({ totalEvents: 0, anomaliesDetected: 0, activeEntities: 0, modelAccuracy: 0, last_trained: null, eventsTrend: 0, anomaliesTrend: 0, entitiesTrend: 0, inferenceLatencyMs: 0, anomalyRate: 0, engineName: 'N/A', seqLen: 0, alertThreshold: 3.0, maxBufferSize: 1000, modelLoaded: false });
             const [timeline, setTimeline] = useState([]);
             const [alerts, setAlerts] = useState([]);
             const [trainingState, setTrainingState] = useState({ is_training: false, progress: '' });
             const [trainConfig, setTrainConfig] = useState({ epochs: 10, batchSize: 32, learningRate: 0.0001 });
             const [explainEntity, setExplainEntity] = useState(null);
+            const [apiStatus, setApiStatus] = useState(false);
 
             const loadData = async () => {
                 try {
@@ -839,7 +840,11 @@
                     setTimeline(t);
                     setAlerts(a);
                     setTrainingState(ts);
-                } catch (e) { console.error('Data pull failed', e); }
+                    setApiStatus(true);
+                } catch (e) {
+                    console.error('Data pull failed', e);
+                    setApiStatus(false);
+                }
             };
 
             useEffect(() => {
@@ -857,7 +862,7 @@
 
             return (
                 <div className="app-layout">
-                    <SidebarNav activeTab={activeTab} onTabChange={setActiveTab} />
+                    <SidebarNav activeTab={activeTab} onTabChange={setActiveTab} apiStatus={apiStatus} />
 
                     <main className="main-content">
                         <header>
@@ -879,9 +884,9 @@
                         {activeTab === 'overview' && (
                             <div>
                                 <div className="stats-grid">
-                                    <StatCard label="Total Events" value={stats.totalEvents.toLocaleString()} icon="database" trend="up" trendValue="+12%" />
-                                    <StatCard label="Live Entities" value={stats.activeEntities.toLocaleString()} icon="users" />
-                                    <StatCard label="Threats Prevented" value={stats.anomaliesDetected} icon="alert-triangle" trend="down" trendValue="-2.4%" />
+                                    <StatCard label="Total Events" value={stats.totalEvents.toLocaleString()} icon="database" trend={stats.eventsTrend !== 0 ? (stats.eventsTrend > 0 ? 'up' : 'down') : null} trendValue={stats.eventsTrend !== 0 ? `${stats.eventsTrend > 0 ? '+' : ''}${stats.eventsTrend}%` : null} />
+                                    <StatCard label="Live Entities" value={stats.activeEntities.toLocaleString()} icon="users" trend={stats.entitiesTrend !== 0 ? (stats.entitiesTrend > 0 ? 'up' : 'down') : null} trendValue={stats.entitiesTrend !== 0 ? `${stats.entitiesTrend > 0 ? '+' : ''}${stats.entitiesTrend}%` : null} />
+                                    <StatCard label="Threats Prevented" value={stats.anomaliesDetected} icon="alert-triangle" trend={stats.anomaliesTrend !== 0 ? (stats.anomaliesTrend > 0 ? 'up' : 'down') : null} trendValue={stats.anomaliesTrend !== 0 ? `${stats.anomaliesTrend > 0 ? '+' : ''}${stats.anomaliesTrend}%` : null} />
                                     <StatCard label="Model Reliability" value={`${stats.modelAccuracy}%`} icon="target" />
                                 </div>
 
@@ -914,20 +919,20 @@
                                             <div>
                                                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8, fontSize: '0.9rem' }}>
                                                     <span>Inference Latency</span>
-                                                    <span>12ms</span>
+                                                    <span>{stats.inferenceLatencyMs > 0 ? `${stats.inferenceLatencyMs}ms` : 'N/A'}</span>
                                                 </div>
-                                                <div className="progress-bar"><div className="progress-fill" style={{ width: '24%', background: 'var(--success)' }}></div></div>
+                                                <div className="progress-bar"><div className="progress-fill" style={{ width: `${Math.min(stats.inferenceLatencyMs / 5, 100)}%`, background: stats.inferenceLatencyMs < 50 ? 'var(--success)' : stats.inferenceLatencyMs < 200 ? 'var(--warning)' : 'var(--accent)' }}></div></div>
                                             </div>
                                             <div>
                                                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8, fontSize: '0.9rem' }}>
-                                                    <span>False Positive Rate</span>
-                                                    <span>0.02%</span>
+                                                    <span>Anomaly Rate</span>
+                                                    <span>{stats.anomalyRate}%</span>
                                                 </div>
-                                                <div className="progress-bar"><div className="progress-fill" style={{ width: '8%', background: 'var(--primary)' }}></div></div>
+                                                <div className="progress-bar"><div className="progress-fill" style={{ width: `${Math.min(stats.anomalyRate * 10, 100)}%`, background: 'var(--primary)' }}></div></div>
                                             </div>
                                             <div style={{ marginTop: 20, textAlign: 'center' }}>
                                                 <div style={{ fontSize: '0.8rem', color: 'var(--text-dim)', marginBottom: 10 }}>AI ENGINE</div>
-                                                <div style={{ fontWeight: 700, letterSpacing: 1 }}>NEW-TRANSFORMER-v2</div>
+                                                <div style={{ fontWeight: 700, letterSpacing: 1 }}>{stats.engineName}</div>
                                             </div>
                                         </div>
                                     </div>
@@ -992,11 +997,11 @@
                                 <div className="panel-title">System Configuration</div>
                                 <div className="input-group">
                                     <label>Alert Threshold (Z-Score)</label>
-                                    <input type="number" defaultValue={3.0} />
+                                    <input type="number" value={stats.alertThreshold} disabled />
                                 </div>
                                 <div className="input-group">
                                     <label>Max Buffer Size</label>
-                                    <input type="number" defaultValue={1000} />
+                                    <input type="number" value={stats.maxBufferSize} disabled />
                                 </div>
                                 <div className="input-group">
                                     <label>Data Source API</label>
