@@ -29,6 +29,8 @@ from tensorflow import keras
 from tensorflow.keras import layers
 from tensorflow.keras.utils import register_keras_serializable
 import subprocess
+from sklearn.metrics import (roc_auc_score, average_precision_score,
+                             precision_recall_fscore_support, roc_curve)
 
 # -----------------------------
 # Utilities
@@ -703,6 +705,54 @@ def score_anomalies_df(nll: np.ndarray, top_ids: np.ndarray, top_ps: np.ndarray,
     alerts_df = cand.head(top_k).copy()
     return scores_all, alerts_df
 
+def detection_metrics(scores_df, score_col, positive_labels=None, alert_z_thresh=3.0):
+    """Compute detection metrics from scored DataFrame.
+    Returns a dict safe to embed in metrics_summary.json.
+    Positive class = any Label not in the Normal/benign set.
+    """
+    if positive_labels is None:
+        positive_labels = {"Normal", "BENIGN", "0", ""}
+
+    y_true = (~scores_df["Label"].isin(positive_labels)).astype(int).values
+    scores = scores_df[score_col].values
+
+    if len(np.unique(y_true)) < 2:
+        return {
+            "note": "single-class data — detection metrics undefined (no attack labels in dataset)",
+            "score_col": score_col,
+            "n_positive": int(y_true.sum()),
+            "n_total": int(len(y_true)),
+        }
+
+    roc_auc = float(roc_auc_score(y_true, scores))
+    pr_auc = float(average_precision_score(y_true, scores))
+
+    # Metrics at operating threshold (entity_nll_z >= alert_z_thresh)
+    y_pred = (scores >= alert_z_thresh).astype(int)
+    prec, rec, f1, _ = precision_recall_fscore_support(y_true, y_pred, average="binary", zero_division=0)
+
+    # Detection rate at low FPR targets
+    fpr_arr, tpr_arr, _ = roc_curve(y_true, scores)
+
+    def tpr_at_fpr(target_fpr):
+        idx = np.searchsorted(fpr_arr, target_fpr, side="right") - 1
+        idx = max(0, min(idx, len(tpr_arr) - 1))
+        return float(tpr_arr[idx])
+
+    return {
+        "score_col": score_col,
+        "roc_auc": roc_auc,
+        "pr_auc": pr_auc,
+        "precision_at_thresh": float(prec),
+        "recall_at_thresh": float(rec),
+        "f1_at_thresh": float(f1),
+        "alert_z_thresh": alert_z_thresh,
+        "detection_at_fpr_1pct": tpr_at_fpr(0.01),
+        "detection_at_fpr_0_1pct": tpr_at_fpr(0.001),
+        "n_positive": int(y_true.sum()),
+        "n_total": int(len(y_true)),
+    }
+
 # -----------------------------
 # Main
 # -----------------------------
@@ -913,8 +963,7 @@ def main():
         "external_test": ext_test_metrics,
         "external_test_unk_rate": unk_rate_ext,
     }
-    with open(os.path.join(out_dir, "metrics_summary.json"), "w") as f:
-        json.dump(metrics_summary, f, indent=2)
+    metrics_summary["lm_metrics_note"] = "acc/top5_acc/perplexity are next-event language model metrics, NOT detection accuracy"
 
     nll_val = compute_nll_only(best_model, Xva, yva)
     plot_nll_hist(nll_val, out_path=os.path.join(out_dir, "nll_hist_val.png"))
@@ -960,6 +1009,11 @@ def main():
         allowlist_dst=allowlist_dst if len(allowlist_dst) else None,
         allowlist_margin=args.allowlist_margin,
     )
+
+    det_metrics = detection_metrics(scores_all, score_col="entity_nll_z", alert_z_thresh=args.alert_z_thresh)
+    metrics_summary["detection"] = det_metrics
+    with open(os.path.join(out_dir, "metrics_summary.json"), "w") as f:
+        json.dump(metrics_summary, f, indent=2)
 
     alerts_path = os.path.join(out_dir, f"log_alerts_{alert_tag}.csv")
     alerts.to_csv(alerts_path, index=False)

@@ -51,7 +51,9 @@ ALERT_QUEUE = queue.Queue()
 TRAINING_STATE = {
     "is_training": False,
     "progress": "",
-    "accuracy": 0.0,
+    "roc_auc": None,
+    "pr_auc": None,
+    "accuracy": 0.0,      # keep for backward compat but don't show as headline
     "top5_accuracy": 0.0,
     "last_trained": None,
     "error": None,
@@ -70,6 +72,7 @@ CONFIG = {
     "model_path": "models/log_transformer.keras",
     "meta_path": "models/log_transformer_meta.json",
     "stats_path": "outputs/entity_stats.csv",
+    "out_dir": "outputs",
     "max_buffer_size": 1000,
     "alert_threshold": 3.0,
 }
@@ -311,8 +314,19 @@ def get_stats():
     
     anomalies_detected = len(alerts)
     
-    # Use real accuracy from training (0.0 if never trained)
-    model_accuracy = TRAINING_STATE["accuracy"]
+    # Read detection ROC-AUC from metrics summary (preferred) or fall back
+    model_accuracy = None
+    metrics_path = os.path.join(CONFIG.get("out_dir", "outputs"), "metrics_summary.json")
+    if os.path.exists(metrics_path):
+        try:
+            with open(metrics_path) as _f:
+                _ms = json.load(_f)
+            _det = _ms.get("detection", {})
+            model_accuracy = _det.get("roc_auc")
+        except Exception:
+            pass
+    if model_accuracy is None:
+        model_accuracy = TRAINING_STATE.get("roc_auc")
     
     # Compute trends (% change from previous snapshot)
     def calc_trend(current, previous):
@@ -660,9 +674,21 @@ def train_model():
                 TRAINING_STATE["accuracy"] = round(val_acc, 1)
                 TRAINING_STATE["top5_accuracy"] = round(val_top5, 1)
                 TRAINING_STATE["last_trained"] = datetime.now().isoformat()
-                TRAINING_STATE["progress"] = f"Complete — accuracy: {val_acc:.1f}%"
                 TRAINING_STATE["is_training"] = False
-                
+                # Read detection metrics from pipeline output
+                try:
+                    import json as _json
+                    _ms_path = os.path.join(CONFIG.get("out_dir", "outputs"), "metrics_summary.json")
+                    with open(_ms_path) as _f:
+                        _ms = _json.load(_f)
+                    _det = _ms.get("detection", {})
+                    TRAINING_STATE["roc_auc"] = _det.get("roc_auc")
+                    TRAINING_STATE["pr_auc"] = _det.get("pr_auc")
+                    _roc = _det.get("roc_auc", "N/A")
+                    TRAINING_STATE["progress"] = f"Complete — ROC-AUC: {_roc}"
+                except Exception:
+                    TRAINING_STATE["progress"] = f"Complete — accuracy: {val_acc:.1f}%"
+
                 print(f"Training complete. Val accuracy: {val_acc:.1f}%, Top-5: {val_top5:.1f}%")
                 
             except Exception as e:
