@@ -75,9 +75,9 @@ def parse_args():
                    help="How to interpret test_csv. If cicids, use --use_r_adapter.")
 
     # sequence params
-    p.add_argument("--seq_len", type=int, default=64)
+    p.add_argument("--seq_len", type=int, default=16)
     p.add_argument("--step", type=int, default=1, help="sequence step size (1=sliding, 64=chunked)")
-    p.add_argument("--min_events_per_entity", type=int, default=200)
+    p.add_argument("--min_events_per_entity", type=int, default=10)
 
     # splitting (applies to TRAIN dataset only; external test_csv is not split)
     p.add_argument("--split_mode", type=str, default="time",

@@ -41,3 +41,6 @@ data/*_clean.csv
 
 # Vendored frontend libs (load from CDN instead)
 recharts.js
+
+# Run logs (transient; not reproducible artifacts)
+outputs/*.log
