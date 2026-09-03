@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-logs_transformer_anomaly_crossdataset.py
----------------------------------------
+new.py — main pipeline entry point
+-----------------------------------
 Transformer next-event model for security logs with:
 - richer tokenization (event_type + dst_bucket + bytes_bucket)
 - leak-safe bucketing/vocab fit on TRAIN only

@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """
-flask_api.py
------------
-Flask REST API for the anomaly detection system.
-Connects the React dashboard with the TensorFlow model.
+backend.py — Flask REST API
+----------------------------
+Connects frontend.html (the dashboard) to the new.py pipeline and model.py.
 """
 
 import os

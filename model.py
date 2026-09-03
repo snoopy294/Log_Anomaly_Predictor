@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-logs_transformer_improved.py
-----------------------------
+model.py — improved transformer + explainability, used by backend.py's /api/explain
+--------------------------------------------------------------------------------------
 Enhanced version with:
 - Improved transformer architecture (residual connections, better normalization)
 - Attention visualization
