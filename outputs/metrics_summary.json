@@ -5,25 +5,32 @@
     "n_sequences": 606
   },
   "val": {
-    "loss": 7.001555442810059,
+    "loss": 7.026673316955566,
     "acc": 0.0,
     "top5_acc": 0.0,
     "baseline_last_token_acc": 0.0,
-    "perplexity": 1094.4376220703125,
-    "mean_nll": 6.997995853424072,
-    "p95_nll": 7.389636516571045,
+    "perplexity": 1124.6966552734375,
+    "mean_nll": 7.0252685546875,
+    "p95_nll": 7.437482833862305,
     "n_sequences": 56
   },
   "internal_test": {
-    "loss": 6.945919990539551,
+    "loss": 7.038761138916016,
     "acc": 0.0,
-    "top5_acc": 0.014705882407724857,
+    "top5_acc": 0.0,
     "baseline_last_token_acc": 0.0,
-    "perplexity": 1032.27587890625,
-    "mean_nll": 6.939521312713623,
-    "p95_nll": 7.356389999389648,
+    "perplexity": 1139.0914306640625,
+    "mean_nll": 7.0379862785339355,
+    "p95_nll": 7.438283920288086,
     "n_sequences": 68
   },
   "external_test": null,
-  "external_test_unk_rate": null
+  "external_test_unk_rate": null,
+  "lm_metrics_note": "acc/top5_acc/perplexity are next-event language model metrics, NOT detection accuracy",
+  "detection": {
+    "note": "single-class data \u2014 detection metrics undefined (no attack labels in dataset)",
+    "score_col": "entity_nll_z",
+    "n_positive": 0,
+    "n_total": 730
+  }
 }

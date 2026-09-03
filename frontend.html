@@ -9,7 +9,7 @@
     <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/prop-types@15/prop-types.min.js"></script>
-    <script src="/assets/recharts.js"></script>
+    <script src="https://unpkg.com/recharts@2/umd/Recharts.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
     <!-- Fonts -->
@@ -887,7 +887,7 @@
                                     <StatCard label="Total Events" value={stats.totalEvents.toLocaleString()} icon="database" trend={stats.eventsTrend !== 0 ? (stats.eventsTrend > 0 ? 'up' : 'down') : null} trendValue={stats.eventsTrend !== 0 ? `${stats.eventsTrend > 0 ? '+' : ''}${stats.eventsTrend}%` : null} />
                                     <StatCard label="Live Entities" value={stats.activeEntities.toLocaleString()} icon="users" trend={stats.entitiesTrend !== 0 ? (stats.entitiesTrend > 0 ? 'up' : 'down') : null} trendValue={stats.entitiesTrend !== 0 ? `${stats.entitiesTrend > 0 ? '+' : ''}${stats.entitiesTrend}%` : null} />
                                     <StatCard label="Threats Prevented" value={stats.anomaliesDetected} icon="alert-triangle" trend={stats.anomaliesTrend !== 0 ? (stats.anomaliesTrend > 0 ? 'up' : 'down') : null} trendValue={stats.anomaliesTrend !== 0 ? `${stats.anomaliesTrend > 0 ? '+' : ''}${stats.anomaliesTrend}%` : null} />
-                                    <StatCard label="Model Reliability" value={`${stats.modelAccuracy}%`} icon="target" />
+                                    <StatCard label="Detection ROC-AUC" value={stats.modelAccuracy == null ? 'N/A' : `${(stats.modelAccuracy * 100).toFixed(1)}%`} icon="target" />
                                 </div>
 
                                 <div className="dashboard-grid">

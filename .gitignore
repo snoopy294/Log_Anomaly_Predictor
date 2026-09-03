@@ -26,3 +26,18 @@ Thumbs.db
 *.pth
 *.onnx
 saved_models/
+
+# Raw / adapted datasets (large; not committed — see data/README.md for
+# provenance and reproduction commands). data/train_data.csv (tiny synthetic
+# sample) is intentionally NOT ignored.
+data/raw_cicids/
+data/*.parquet
+data/cicids_clean.csv
+data/*_clean.csv
+!data/train_data.csv
+
+# Model artifacts (large binaries; keep on disk, do not commit)
+*.keras
+
+# Vendored frontend libs (load from CDN instead)
+recharts.js
