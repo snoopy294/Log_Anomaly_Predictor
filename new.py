@@ -556,34 +556,22 @@ def build_transformer_next_event_model(
 # -----------------------------
 def compute_nll_only(model: keras.Model, X: np.ndarray, y: np.ndarray, batch_size=512):
     n = len(y)
-    nll = np.empty((n,), dtype=np.float32)
-    for i in range(0, n, batch_size):
-        xb = X[i:i + batch_size]
-        yb = y[i:i + batch_size]
-        pb = model.predict(xb,verbose=0)
-        p_true = pb[np.arange(len(yb)), yb]
-        nll[i:i + len(yb)] = -np.log(np.clip(p_true, 1e-9, 1.0))
-    return nll
+    # Single predict() call — let Keras iterate batches internally. Calling
+    # model.predict() per-batch in a Python loop pays its ~fixed per-call
+    # overhead thousands of times on large datasets (hours, not minutes).
+    pb = model.predict(X, batch_size=batch_size, verbose=0)
+    p_true = pb[np.arange(n), y]
+    return (-np.log(np.clip(p_true, 1e-9, 1.0))).astype(np.float32)
 
 def compute_topk_for_alerts(model: keras.Model, X: np.ndarray, y: np.ndarray, k: int = 5, batch_size=512):
     n = len(y)
-    nll = np.empty((n,), dtype=np.float32)
-    top_ids = np.empty((n, k), dtype=np.int32)
-    top_ps = np.empty((n, k), dtype=np.float32)
+    pb = model.predict(X, batch_size=batch_size, verbose=0)
 
-    for i in range(0, n, batch_size):
-        xb = X[i:i + batch_size]
-        yb = y[i:i + batch_size]
-        pb = model.predict(xb, verbose=0)
+    p_true = pb[np.arange(n), y]
+    nll = (-np.log(np.clip(p_true, 1e-9, 1.0))).astype(np.float32)
 
-        p_true = pb[np.arange(len(yb)), yb]
-        nll[i:i + len(yb)] = -np.log(np.clip(p_true, 1e-9, 1.0))
-
-        ids = np.argsort(-pb, axis=1)[:, :k]
-        ps = np.take_along_axis(pb, ids, axis=1)
-
-        top_ids[i:i + len(yb)] = ids
-        top_ps[i:i + len(yb)] = ps
+    top_ids = np.argsort(-pb, axis=1)[:, :k].astype(np.int32)
+    top_ps = np.take_along_axis(pb, top_ids, axis=1).astype(np.float32)
 
     return nll, top_ids, top_ps
 
