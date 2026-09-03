@@ -554,24 +554,50 @@ def build_transformer_next_event_model(
 # -----------------------------
 # Scoring + metrics
 # -----------------------------
+def _make_predict_fn(model: keras.Model):
+    # tf.function traces once per input shape (batch_size, then again for the
+    # final partial batch) and reuses the compiled graph after that — unlike
+    # calling model.predict() per batch, whose Python-level setup cost is
+    # paid on every single call.
+    @tf.function(reduce_retracing=True)
+    def _predict(xb):
+        return model(xb, training=False)
+    return _predict
+
 def compute_nll_only(model: keras.Model, X: np.ndarray, y: np.ndarray, batch_size=512):
     n = len(y)
-    # Single predict() call — let Keras iterate batches internally. Calling
-    # model.predict() per-batch in a Python loop pays its ~fixed per-call
-    # overhead thousands of times on large datasets (hours, not minutes).
-    pb = model.predict(X, batch_size=batch_size, verbose=0)
-    p_true = pb[np.arange(n), y]
-    return (-np.log(np.clip(p_true, 1e-9, 1.0))).astype(np.float32)
+    nll = np.empty((n,), dtype=np.float32)
+    predict_fn = _make_predict_fn(model)
+    # Chunk to bound memory — holding all n x vocab_size predictions in one
+    # array at once OOMs on large datasets.
+    for i in range(0, n, batch_size):
+        xb = X[i:i + batch_size]
+        yb = y[i:i + batch_size]
+        pb = predict_fn(xb).numpy()
+        p_true = pb[np.arange(len(yb)), yb]
+        nll[i:i + len(yb)] = -np.log(np.clip(p_true, 1e-9, 1.0))
+    return nll
 
 def compute_topk_for_alerts(model: keras.Model, X: np.ndarray, y: np.ndarray, k: int = 5, batch_size=512):
     n = len(y)
-    pb = model.predict(X, batch_size=batch_size, verbose=0)
+    nll = np.empty((n,), dtype=np.float32)
+    top_ids = np.empty((n, k), dtype=np.int32)
+    top_ps = np.empty((n, k), dtype=np.float32)
+    predict_fn = _make_predict_fn(model)
 
-    p_true = pb[np.arange(n), y]
-    nll = (-np.log(np.clip(p_true, 1e-9, 1.0))).astype(np.float32)
+    for i in range(0, n, batch_size):
+        xb = X[i:i + batch_size]
+        yb = y[i:i + batch_size]
+        pb = predict_fn(xb).numpy()
 
-    top_ids = np.argsort(-pb, axis=1)[:, :k].astype(np.int32)
-    top_ps = np.take_along_axis(pb, top_ids, axis=1).astype(np.float32)
+        p_true = pb[np.arange(len(yb)), yb]
+        nll[i:i + len(yb)] = -np.log(np.clip(p_true, 1e-9, 1.0))
+
+        ids = np.argsort(-pb, axis=1)[:, :k]
+        ps = np.take_along_axis(pb, ids, axis=1)
+
+        top_ids[i:i + len(yb)] = ids
+        top_ps[i:i + len(yb)] = ps
 
     return nll, top_ids, top_ps
 
