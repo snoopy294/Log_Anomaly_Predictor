@@ -33,8 +33,10 @@ composition, not a scoring-math bug.
 ### 1. Entity redefinition
 
 `cicids_to_clean.py`: `entity_id` becomes `Destination IP` (was `Source
-IP`). The per-event feature column that held destination IP (`dst_id`)
-becomes `src_id`, holding Source IP instead. No other schema change.
+IP`). The `dst_id` column keeps its name (it's a generic-pipeline column
+name shared with `new.py`, `backend.py`, `frontend.html`, and others — see
+Section 2) but now holds Source IP values instead of Destination IP values.
+No other schema change.
 
 Rationale: DoS/DDoS is a victim-side phenomenon. A destination accumulates
 traffic from many sources over the full capture window and has a genuine,
@@ -47,13 +49,22 @@ cannot.
 
 ### 2. Token/vocab features
 
-`fit_dst_vocab`/`bucket_dst` are renamed to `fit_src_vocab`/`bucket_src` and
-operate on source-IP frequency (top-N + `OTHER`) instead of destination —
-same bucketing logic, now describing "who is talking to me" instead of "who
-am I talking to." Token strings become
-`event_type|SRC=...|BYTES_Qn`. `build_vocab_from_buckets` vocabulary naming
-updates accordingly. Bytes quantile bucketing (`fit_bytes_bins`/
-`bucket_bytes`) is unchanged.
+No changes to `new.py`. `dst_id`, `fit_dst_vocab`, `bucket_dst`, and
+`build_vocab_from_buckets` are generic-pipeline names shared with
+`backend.py`, `frontend.html`, `model.py`, `generate_data.py`, and the R
+scripts (confirmed via grep — 15 files reference these names). They bucket
+"whatever is in the `dst_id` column" agnostic to real-world meaning, so no
+rename is functionally required.
+
+Instead, only `cicids_to_clean.py`'s column *content* changes (see Section
+1): `entity_id` becomes Destination IP, and the `dst_id` column — same
+name, same generic downstream handling — now holds Source IP values for
+this dataset. The existing `fit_dst_vocab`/`bucket_dst` logic then buckets
+by source-IP frequency (top-N + `OTHER`) with zero code changes, simply
+because that's what's now in the column. Token strings stay
+`event_type|DST=...|BYTES_Qn` in form (the `DST=` prefix is generic-pipeline
+naming, not a semantic claim about CICIDS specifically). Bytes quantile
+bucketing (`fit_bytes_bins`/`bucket_bytes`) is unchanged.
 
 ### 3. Split and training-data filtering
 
