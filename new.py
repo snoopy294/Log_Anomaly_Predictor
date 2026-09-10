@@ -602,16 +602,25 @@ def compute_topk_for_alerts(model: keras.Model, X: np.ndarray, y: np.ndarray, k:
     return nll, top_ids, top_ps
 
 
-def fit_entity_nll_stats_train_only(entities_train: np.ndarray, nll_train: np.ndarray):
+def fit_entity_nll_stats_train_only(entities_train: np.ndarray, nll_train: np.ndarray, min_n: int = 5):
     df = pd.DataFrame({"entity_id": entities_train.astype(str), "nll": nll_train.astype(float)})
-    stats = df.groupby("entity_id")["nll"].agg(["mean", "std"]).reset_index()
-    stats.columns = ["entity_id", "mean_nll", "std_nll"]
+    stats = df.groupby("entity_id")["nll"].agg(["mean", "std", "count"]).reset_index()
+    stats.columns = ["entity_id", "mean_nll", "std_nll", "n_nll"]
 
     global_mean = float(df["nll"].mean())
     global_std = float(df["nll"].std(ddof=0))
     if not np.isfinite(global_std) or global_std <= 0:
         global_std = 1e-6
-    stats["std_nll"] = stats["std_nll"].fillna(0.0).replace(0.0, 1e-6)
+
+    # An entity with too few train sequences (or near-constant NLL) yields a
+    # near-zero/NaN std. Flooring that to a tiny epsilon (as before) turns any
+    # later deviation, however ordinary, into a z-score in the millions —
+    # silently drowning out real anomalies for every other entity. Fall back
+    # to the global std/mean instead: not entity-specific, but not degenerate.
+    unreliable = (~np.isfinite(stats["std_nll"])) | (stats["std_nll"] <= 1e-3) | (stats["n_nll"] < min_n)
+    stats.loc[unreliable, "mean_nll"] = global_mean
+    stats.loc[unreliable, "std_nll"] = global_std
+    stats = stats.drop(columns=["n_nll"])
     return stats, global_mean, global_std
 
 def baseline_last_token_accuracy(X: np.ndarray, y: np.ndarray):
