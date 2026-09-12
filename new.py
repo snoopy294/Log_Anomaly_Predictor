@@ -89,6 +89,11 @@ def parse_args():
     # tokenization controls
     p.add_argument("--dst_top_n", type=int, default=200)
     p.add_argument("--bytes_num_buckets", type=int, default=8)
+    p.add_argument("--train_only_label", type=str, default="",
+                   help="If set, restrict the TRAIN partition (post-split, pre-vocab-fit) to "
+                        "rows where Label equals this value, e.g. 'BENIGN' for CICIDS. "
+                        "Val/test partitions are never filtered. Default '' = no filtering "
+                        "(synthetic/unlabeled data behavior is unchanged).")
 
     # training
     p.add_argument("--epochs", type=int, default=20)
@@ -395,6 +400,19 @@ def split_time_within_groups(df: pd.DataFrame, train_frac: float, val_frac: floa
         va_parts.append(g2.iloc[n_train:n_train + n_val])
         te_parts.append(g2.iloc[n_train + n_val:])
     return pd.concat(tr_parts), pd.concat(va_parts), pd.concat(te_parts)
+
+def filter_train_by_label(df_tr: pd.DataFrame, label: str) -> pd.DataFrame:
+    """Restrict a TRAIN partition to rows matching `label` (e.g. "BENIGN").
+
+    Applied only to the TRAIN split, never to val/test, so the model and
+    its per-entity NLL baselines are fit exclusively on known-normal
+    behavior while evaluation stays an honest mix of normal + anomalous.
+    No-op (returns df_tr unchanged) when label is empty/falsy, so callers
+    that never pass --train_only_label see no behavior change.
+    """
+    if not label:
+        return df_tr
+    return df_tr[df_tr["Label"].astype(str) == label].copy()
 
 # -----------------------------
 # Tokenization (fit on TRAIN only)
@@ -839,6 +857,16 @@ def main():
         df_va, _, _ = split_time_within_groups(df_va0, 0.50, 0.0)
         df_te_internal, _, _ = split_time_within_groups(df_te0, 0.50, 0.0)
 
+    if args.train_only_label:
+        n_before = len(df_tr)
+        df_tr = filter_train_by_label(df_tr, args.train_only_label)
+        print(f"[train-filter] Label=={args.train_only_label!r}: TRAIN {n_before} -> {len(df_tr)} rows")
+        if len(df_tr) == 0:
+            raise RuntimeError(
+                f"No TRAIN rows remain after --train_only_label={args.train_only_label!r}. "
+                "Check that this Label value exists in the TRAIN time window."
+            )
+
     # 3) Fit tokenization pieces on TRAIN ONLY
     dst_keep = fit_dst_vocab(df_tr, top_n=args.dst_top_n)
     bytes_edges = fit_bytes_bins(df_tr, num_buckets=args.bytes_num_buckets)
@@ -922,6 +950,7 @@ def main():
         "train_frac": float(args.train_frac),
         "val_frac": float(args.val_frac),
         "dst_top_n": int(args.dst_top_n),
+        "train_only_label": args.train_only_label,
         "bytes_num_buckets": int(args.bytes_num_buckets),
         "bytes_edges_log1p": bytes_edges.tolist(),
         "vocab_size": int(vocab_size),
