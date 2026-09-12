@@ -17,8 +17,13 @@ Field semantics are translated line-for-line from cicids_into_clean.R:
 - bytes (R lines 82-92): "Total Length of Fwd Packets" + "Total Length of Bwd
   Packets" if both present, else "Subflow Fwd Bytes" + "Subflow Bwd Bytes",
   else 0. NaNs coerced to 0 (R line 92).
-- entity_id = Source IP, dst_id = Destination IP, Label = Label column
-  (empty string if missing) (R lines 94-101).
+- entity_id = Destination IP, dst_id = Source IP, Label = Label column
+  (empty string if missing). Destination is the entity (not R lines
+  94-101's original Source-IP mapping) so that per-entity anomaly
+  baselines are built from a host's own traffic history, which has a
+  genuine benign period, rather than from a single attacker machine's
+  history, which does not. See
+  docs/superpowers/specs/2026-09-10-cicids-destination-centric-entity-design.md.
 - timestamp parsed to UTC ISO-8601 "%Y-%m-%dT%H:%M:%SZ" (R lines 35-45, 105).
 - Column names are whitespace-trimmed first (R line 64: raw CICIDS CSVs have
   leading spaces like " Source IP").
@@ -140,9 +145,9 @@ def convert(df: pd.DataFrame, verbose: bool = False) -> pd.DataFrame:
 
     out = pd.DataFrame({
         "timestamp": parse_timestamp_utc(df[ts_col]),
-        "entity_id": df[src_col].astype(str).str.strip(),
+        "entity_id": df[dst_col].astype(str).str.strip(),
         "event_type": event_type_from_proto_dport(df[proto_col], df[dport_col]),
-        "dst_id": df[dst_col].astype(str).str.strip(),
+        "dst_id": df[src_col].astype(str).str.strip(),
         "bytes": compute_bytes(df),
         "Label": df[label_col].astype(str).str.strip() if label_col else "",
     })
