@@ -1,5 +1,30 @@
 #!/usr/bin/env Rscript
 
+# -----------------------------------------------------------------------------
+# ENTITY-KEY DIVERGENCE WARNING (as of the feat/resume-detection-overhaul branch)
+#
+# This script keys `entity_id` on Source IP (see the `entity_id = ...` line
+# below). `cicids_to_clean.py`, the Python equivalent of this converter, was
+# changed on this branch to key `entity_id` on Destination IP instead, for
+# CICIDS-specific detection-quality reasons: source IPs for attacks like
+# DoS/DDoS/PortScan have almost no genuine benign history, which makes
+# per-entity anomaly baselines built on Source IP meaningless for those
+# attack types.
+#
+# The two converters now disagree on what an "entity" is, and they were NOT
+# reconciled: backend.py's web-upload path for CICIDS files calls THIS R
+# script, not cicids_to_clean.py.
+#
+# Consequence: a model trained on Python-converted (destination-centric)
+# CICIDS data must NOT be used to score data produced by this R script (or by
+# backend.py's upload path) without first reconciling the entity-key
+# semantics. Doing so will silently produce meaningless scores -- there is no
+# version/compatibility check anywhere in the pipeline that catches an
+# entity-key mismatch between a model and its scoring input (only vocab_size
+# is checked). If/when a destination-centric model is wired into
+# backend.py's live scoring path, this divergence must be resolved first.
+# -----------------------------------------------------------------------------
+
 suppressPackageStartupMessages({
   library(optparse)
   library(readr)
@@ -93,6 +118,8 @@ bytes[is.na(bytes)] <- 0
 
 out <- tibble(
   timestamp = parse_timestamp_utc(df$Timestamp),
+  # entity_id keyed on Source IP -- diverges from cicids_to_clean.py, which
+  # keys on Destination IP as of this branch. See warning block at top of file.
   entity_id = as.character(df$`Source IP`),
   event_type = mapply(event_type_from_proto_dport, df$Protocol, df$`Destination Port`),
   dst_id = as.character(df$`Destination IP`),
