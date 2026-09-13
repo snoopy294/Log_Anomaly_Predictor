@@ -794,6 +794,37 @@ def detection_metrics(scores_df, score_col, positive_labels=None, alert_z_thresh
         "n_total": int(len(y_true)),
     }
 
+
+def detection_metrics_by_label(scores_df, score_col, benign_labels=None):
+    """Per-attack-type ROC-AUC breakdown: for each non-benign Label present in
+    scores_df, compute ROC-AUC of that label's rows vs. all BENIGN rows using
+    score_col. Lets us confirm specific attack types (DoS Hulk, PortScan,
+    DDoS, ...) are actually separable from normal traffic, not just the
+    aggregate detection_metrics() number which mixes all attack types together.
+    """
+    if benign_labels is None:
+        benign_labels = {"Normal", "BENIGN", "0", ""}
+
+    is_benign = scores_df["Label"].isin(benign_labels)
+    benign_scores = scores_df.loc[is_benign, score_col].values
+
+    out = {}
+    for label in sorted(scores_df.loc[~is_benign, "Label"].unique()):
+        lbl_scores = scores_df.loc[scores_df["Label"] == label, score_col].values
+        n_pos = len(lbl_scores)
+        if n_pos == 0 or len(benign_scores) == 0:
+            continue
+        y_true = np.concatenate([np.zeros(len(benign_scores)), np.ones(n_pos)])
+        y_score = np.concatenate([benign_scores, lbl_scores])
+        if len(np.unique(y_true)) < 2:
+            continue
+        out[str(label)] = {
+            "roc_auc": float(roc_auc_score(y_true, y_score)),
+            "n_positive": int(n_pos),
+            "n_benign_compared": int(len(benign_scores)),
+        }
+    return out
+
 # -----------------------------
 # Main
 # -----------------------------
@@ -1064,6 +1095,7 @@ def main():
 
     det_metrics = detection_metrics(scores_all, score_col="entity_nll_z", alert_z_thresh=args.alert_z_thresh)
     metrics_summary["detection"] = det_metrics
+    metrics_summary["detection_by_label"] = detection_metrics_by_label(scores_all, score_col="entity_nll_z")
     with open(os.path.join(out_dir, "metrics_summary.json"), "w") as f:
         json.dump(metrics_summary, f, indent=2)
 
