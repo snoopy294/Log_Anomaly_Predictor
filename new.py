@@ -103,6 +103,9 @@ def parse_args():
     p.add_argument("--top_k_alerts", type=int, default=300)
     p.add_argument("--alert_z_thresh", type=float, default=3.0)
     p.add_argument("--max_alerts_per_entity", type=int, default=10)
+    p.add_argument("--combo_thresh", type=float, default=2.0,
+                   help="Operating threshold on combo_score (mean |robust z| of window features) "
+                        "for precision/recall in detection_heldout.")
 
     # allowlist suppression
     p.add_argument("--allowlist_top_dst", type=int, default=0)
@@ -520,6 +523,101 @@ def make_sequences_from_events(df: pd.DataFrame, tok_map: dict, seq_len: int, st
     lab = np.array(label_list, dtype=object)
     rid_end = np.array(rid_list, dtype=np.int64)
     return X, y, t, e, lab, rid_end
+
+# -----------------------------
+# Window features (complement NLL)
+# -----------------------------
+# NLL only measures surprise. Repetitive attacks (scans, brute force, floods,
+# slow DoS) become highly *predictable* once underway, so they score LOW NLL.
+# These features capture "abnormally regular / concentrated" windows instead.
+WINDOW_FEATURES = ["tok_uniq", "tok_top_share", "dst_uniq", "dst_top_share",
+                   "bytes_mean", "bytes_std", "repeat_last"]
+
+def _uniq_and_top_share(M: np.ndarray, chunk: int = 100_000):
+    """Per row of M: number of distinct values, and share of the most common value."""
+    n, w = M.shape
+    uniq = np.empty(n, np.float32)
+    top = np.empty(n, np.float32)
+    for i in range(0, n, chunk):
+        m = M[i:i + chunk]
+        counts = (m[:, :, None] == m[:, None, :]).sum(axis=2).astype(np.float32)
+        uniq[i:i + chunk] = (1.0 / counts).sum(axis=1)
+        top[i:i + chunk] = counts.max(axis=1) / w
+    return uniq, top
+
+def make_window_features(df: pd.DataFrame, tok_map: dict, seq_len: int, step: int) -> pd.DataFrame:
+    """Features over each (seq_len context + target) window, row-aligned with
+    make_sequences_from_events(df, tok_map, seq_len, step)."""
+    df = df.sort_values(["entity_id", "timestamp"]).copy()
+    tok = df["token_str"].map(tok_map).fillna(1).astype(np.int32).to_numpy()
+    dst = pd.factorize(df["dst_id"].astype(str))[0].astype(np.int32)
+    byt = np.log1p(np.clip(df["bytes"].to_numpy(np.float64), 0.0, None)).astype(np.float32)
+    w = seq_len + 1
+
+    # Entities are contiguous after the sort, in the same order groupby(sort=False)
+    # visits them in make_sequences_from_events.
+    ent = df["entity_id"].to_numpy(object)
+    starts = np.flatnonzero(np.r_[True, ent[1:] != ent[:-1]]) if len(ent) else np.zeros(0, int)
+    ends = np.r_[starts[1:], len(ent)]
+
+    tok_w, dst_w, byt_w = [], [], []
+    sw = np.lib.stride_tricks.sliding_window_view
+    for s, e in zip(starts, ends):
+        if e - s < w:
+            continue
+        tok_w.append(sw(tok[s:e], w)[::step])
+        dst_w.append(sw(dst[s:e], w)[::step])
+        byt_w.append(sw(byt[s:e], w)[::step])
+
+    if not tok_w:
+        return pd.DataFrame({c: np.zeros(0, np.float32) for c in WINDOW_FEATURES})
+
+    tok_w, dst_w, byt_w = np.concatenate(tok_w), np.concatenate(dst_w), np.concatenate(byt_w)
+    f = {}
+    f["tok_uniq"], f["tok_top_share"] = _uniq_and_top_share(tok_w)
+    f["dst_uniq"], f["dst_top_share"] = _uniq_and_top_share(dst_w)
+    f["bytes_mean"] = byt_w.mean(axis=1)
+    f["bytes_std"] = byt_w.std(axis=1)
+    f["repeat_last"] = (tok_w[:, -1] == tok_w[:, -2]).astype(np.float32)
+    return pd.DataFrame(f)[WINDOW_FEATURES]
+
+def fit_window_baselines(feats_train: pd.DataFrame, entities_train: np.ndarray, min_n: int = 30):
+    """Robust (median / MAD) per-entity baselines, fit on TRAIN windows only.
+    Entities with fewer than min_n windows fall back to the global baseline."""
+    df = feats_train.copy()
+    cols = list(feats_train.columns)
+    df["entity_id"] = entities_train.astype(str)
+
+    g_med = df[cols].median()
+    g_std = df[cols].std(ddof=0).fillna(0.0)
+    # Discrete features (unique counts, shares) often have MAD == 0; the floor
+    # keeps a single-step change from producing an infinite z-score.
+    floor = np.maximum(0.25 * g_std, 1e-3)
+    g_scale = np.maximum((df[cols] - g_med).abs().median() * 1.4826, floor)
+
+    grp = df.groupby("entity_id")
+    e_med = grp[cols].median()
+    e_mad = (df[cols] - e_med.reindex(df["entity_id"]).to_numpy()).abs()
+    e_mad["entity_id"] = df["entity_id"].to_numpy()
+    e_scale = (e_mad.groupby("entity_id")[cols].median() * 1.4826).clip(lower=floor, axis=1)
+    known = grp.size() >= min_n
+    return {"cols": cols, "e_med": e_med[known], "e_scale": e_scale[known],
+            "g_med": g_med, "g_scale": g_scale}
+
+def robust_window_z(feats: pd.DataFrame, entities: np.ndarray, baselines: dict, clip: float = 50.0) -> pd.DataFrame:
+    """Two-sided-ready robust z per feature: (x - entity median) / entity scale."""
+    ents = pd.Index(entities.astype(str))
+    out = {}
+    for c in baselines["cols"]:
+        med = baselines["e_med"][c].reindex(ents).fillna(baselines["g_med"][c]).to_numpy()
+        scale = baselines["e_scale"][c].reindex(ents).fillna(baselines["g_scale"][c]).to_numpy()
+        out[f"z_{c}"] = np.clip((feats[c].to_numpy(np.float64) - med) / scale, -clip, clip)
+    return pd.DataFrame(out)
+
+def combo_score(z: pd.DataFrame) -> np.ndarray:
+    """Label-free combined anomaly score: mean |robust z| across features.
+    Catches both 'too surprising' and 'too regular' windows."""
+    return z.abs().mean(axis=1).to_numpy()
 
 # -----------------------------
 # Model
@@ -1097,6 +1195,24 @@ def main():
 
     nll_alert, top_ids_alert, top_ps_alert = compute_topk_for_alerts(best_model, X_alert, y_alert, k=5)
 
+    # 11b) Window features + combined score; robust baselines from TRAIN windows only
+    feats_tr = make_window_features(df_tr, tok_map, args.seq_len, args.step)
+    feats_tr["nll"] = nll_tr_only
+    win_baselines = fit_window_baselines(feats_tr, etr)
+    if alert_tag == "external_test":
+        feats_alert = make_window_features(df_external_test, tok_map, args.seq_len, args.step)
+        split_alert = np.full(len(y_alert), "external_test", dtype=object)
+    else:
+        feats_alert = pd.concat([feats_tr.drop(columns="nll"),
+                                 make_window_features(df_va, tok_map, args.seq_len, args.step),
+                                 make_window_features(df_te_internal, tok_map, args.seq_len, args.step)],
+                                ignore_index=True)
+        split_alert = np.repeat(np.array(["train", "val", "internal_test"], dtype=object),
+                                [len(ytr), len(yva), len(yte_i)])
+    assert len(feats_alert) == len(y_alert), "window features misaligned with sequences"
+    feats_alert["nll"] = nll_alert
+    z_alert = robust_window_z(feats_alert, e_alert, win_baselines)
+
     scores_all, alerts = score_anomalies_df(
         nll_alert, top_ids_alert, top_ps_alert, y_alert,
         vocab, e_alert, t_alert, l_alert, rid_alert,
@@ -1110,9 +1226,25 @@ def main():
         allowlist_margin=args.allowlist_margin,
     )
 
+    scores_all["split"] = split_alert
+    scores_all["combo_score"] = combo_score(z_alert)
+    scores_all = pd.concat([scores_all, z_alert], axis=1)
+    alerts["combo_score"] = scores_all.loc[alerts.index, "combo_score"].to_numpy()
+
     det_metrics = detection_metrics(scores_all, score_col="entity_nll_z", alert_z_thresh=args.alert_z_thresh)
     metrics_summary["detection"] = det_metrics
     metrics_summary["detection_by_label"] = detection_metrics_by_label(scores_all, score_col="entity_nll_z")
+
+    # Held-out only (excludes TRAIN windows, whose baselines were fit on themselves)
+    held = scores_all[scores_all["split"] != "train"]
+    metrics_summary["detection_heldout"] = {
+        "entity_nll_z": detection_metrics(held, score_col="entity_nll_z", alert_z_thresh=args.alert_z_thresh),
+        "combo_score": detection_metrics(held, score_col="combo_score", alert_z_thresh=args.combo_thresh),
+    }
+    metrics_summary["detection_by_label_heldout"] = {
+        "entity_nll_z": detection_metrics_by_label(held, score_col="entity_nll_z"),
+        "combo_score": detection_metrics_by_label(held, score_col="combo_score"),
+    }
     with open(os.path.join(out_dir, "metrics_summary.json"), "w") as f:
         json.dump(metrics_summary, f, indent=2)
 
