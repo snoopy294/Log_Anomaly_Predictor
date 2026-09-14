@@ -696,14 +696,19 @@ def _make_predict_fn(model: keras.Model):
 def compute_nll_only(model: keras.Model, X: np.ndarray, y: np.ndarray, batch_size=512):
     n = len(y)
     nll = np.empty((n,), dtype=np.float32)
-    predict_fn = _make_predict_fn(model)
+
+    # Gather p(true) on-device so only (batch,) floats cross back to the host,
+    # not the full (batch, vocab_size) probability matrix.
+    @tf.function(reduce_retracing=True)
+    def _p_true(xb, yb):
+        return tf.gather(model(xb, training=False), yb, batch_dims=1)
+
     # Chunk to bound memory — holding all n x vocab_size predictions in one
     # array at once OOMs on large datasets.
     for i in range(0, n, batch_size):
         xb = X[i:i + batch_size]
         yb = y[i:i + batch_size]
-        pb = predict_fn(xb).numpy()
-        p_true = pb[np.arange(len(yb)), yb]
+        p_true = _p_true(xb, yb).numpy()
         nll[i:i + len(yb)] = -np.log(np.clip(p_true, 1e-9, 1.0))
     return nll
 
@@ -712,21 +717,23 @@ def compute_topk_for_alerts(model: keras.Model, X: np.ndarray, y: np.ndarray, k:
     nll = np.empty((n,), dtype=np.float32)
     top_ids = np.empty((n, k), dtype=np.int32)
     top_ps = np.empty((n, k), dtype=np.float32)
-    predict_fn = _make_predict_fn(model)
+
+    # top_k on-device: a host-side argsort over the full vocab for every row
+    # was the dominant cost of scoring (~50 min on CICIDS).
+    @tf.function(reduce_retracing=True)
+    def _p_true_topk(xb, yb):
+        pb = model(xb, training=False)
+        ps, ids = tf.math.top_k(pb, k=k)
+        return tf.gather(pb, yb, batch_dims=1), ids, ps
 
     for i in range(0, n, batch_size):
         xb = X[i:i + batch_size]
         yb = y[i:i + batch_size]
-        pb = predict_fn(xb).numpy()
+        p_true, ids, ps = _p_true_topk(xb, yb)
 
-        p_true = pb[np.arange(len(yb)), yb]
-        nll[i:i + len(yb)] = -np.log(np.clip(p_true, 1e-9, 1.0))
-
-        ids = np.argsort(-pb, axis=1)[:, :k]
-        ps = np.take_along_axis(pb, ids, axis=1)
-
-        top_ids[i:i + len(yb)] = ids
-        top_ps[i:i + len(yb)] = ps
+        nll[i:i + len(yb)] = -np.log(np.clip(p_true.numpy(), 1e-9, 1.0))
+        top_ids[i:i + len(yb)] = ids.numpy()
+        top_ps[i:i + len(yb)] = ps.numpy()
 
     return nll, top_ids, top_ps
 
