@@ -7,6 +7,8 @@ Transformer next-event model for security logs with:
 - leak-safe bucketing/vocab fit on TRAIN only
 - split modes within TRAIN dataset (time/entity/time_entity)
 - evaluation + metrics_summary.json (baseline, perplexity, etc.)
+- window-shape features + combo_score (mean robust |z| vs. per-entity TRAIN baseline),
+  the default alert score; threshold calibrated on BENIGN val windows (--target_fpr)
 - timeline plots per entity
 - allowlist suppression (optional)
 - alert packet export (seq_len context + target) + manifest.csv

@@ -76,6 +76,22 @@ them from `outputs/metrics_summary.json`.
 - **CICIDS attacks are concentrated bursts against a few hosts.** That favors
   window-shape statistics, and results on low-and-slow real-world traffic may be lower.
 
+## Repository layout
+
+| Path | Role |
+|---|---|
+| `new.py` | Main pipeline: tokenize, split, train, score, calibrate, write alerts and metrics |
+| `backend.py` | Flask API that serves the dashboard (`frontend.html`) |
+| `model.py` | Explainability helpers used by `/api/explain` |
+| `cicids_into_clean.R`, `cicids_to_clean.py` | CICIDS2017 → clean event schema converters (R, plus a Python fallback) |
+| `scripts/` | Utilities: `render_results.py` (README tables), `generate_data.py` (synthetic sample) |
+| `tests/` | pytest suite |
+| `outputs/` | Committed metrics and plots from the reference run |
+| `experiments/` | Side experiments, not part of the pipeline |
+
+Common tasks: `make train` (small synthetic sample), `make train-cicids`, `make results`,
+`make test`, `make serve`.
+
 ## Reproduce
 
 Training runs on a GPU. Data splits are chronological within each (entity, label)
