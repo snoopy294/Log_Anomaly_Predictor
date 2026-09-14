@@ -1,43 +1,264 @@
 {
   "train": {
-    "n_events": 2788384,
-    "n_entities": 5635,
-    "n_sequences": 1877550
+    "n_events": 2788192,
+    "n_entities": 9313,
+    "n_sequences": 1434066
   },
   "val": {
-    "loss": 2.3515822887420654,
-    "acc": 0.5023508667945862,
-    "top5_acc": 0.8687513470649719,
-    "baseline_last_token_acc": 0.4435731877102189,
-    "perplexity": 6.231118202209473,
-    "mean_nll": 1.8295557498931885,
-    "p95_nll": 6.2268290519714355,
-    "n_sequences": 388583
+    "loss": 3.5176730155944824,
+    "acc": 0.3794158399105072,
+    "top5_acc": 0.7454659938812256,
+    "baseline_last_token_acc": 0.45801250338564264,
+    "perplexity": 20.982234954833984,
+    "mean_nll": 3.0436761379241943,
+    "p95_nll": 10.243959426879883,
+    "n_sequences": 361822
   },
   "internal_test": {
-    "loss": 2.4749600887298584,
-    "acc": 0.4632740020751953,
-    "top5_acc": 0.8544161319732666,
-    "baseline_last_token_acc": 0.4247784883272979,
-    "perplexity": 7.142270088195801,
-    "mean_nll": 1.9660307168960571,
-    "p95_nll": 6.720317840576172,
-    "n_sequences": 389370
+    "loss": 3.3446741104125977,
+    "acc": 0.3898806869983673,
+    "top5_acc": 0.7621622681617737,
+    "baseline_last_token_acc": 0.4374432665276639,
+    "perplexity": 17.485118865966797,
+    "mean_nll": 2.8613502979278564,
+    "p95_nll": 10.297733306884766,
+    "n_sequences": 363542
   },
   "external_test": null,
   "external_test_unk_rate": null,
   "lm_metrics_note": "acc/top5_acc/perplexity are next-event language model metrics, NOT detection accuracy",
   "detection": {
-    "score_col": "entity_nll_z",
-    "roc_auc": 0.5776563704385321,
-    "pr_auc": 0.24604665389574423,
-    "precision_at_thresh": 0.14195770140531516,
-    "recall_at_thresh": 0.014667536439717,
-    "f1_at_thresh": 0.02658792142197494,
-    "alert_z_thresh": 3.0,
-    "detection_at_fpr_1pct": 0.010383365051296842,
-    "detection_at_fpr_0_1pct": 0.0024943078385600585,
-    "n_positive": 556467,
-    "n_total": 2655503
+    "score_col": "combo_score",
+    "roc_auc": 0.9963483697398285,
+    "pr_auc": 0.9902241226262166,
+    "precision_at_thresh": 0.9833518445535213,
+    "recall_at_thresh": 0.9863911350703803,
+    "f1_at_thresh": 0.9848691450169849,
+    "alert_z_thresh": 3.3655600590342862,
+    "detection_at_fpr_1pct": 0.9917939502845163,
+    "detection_at_fpr_0_1pct": 0.7090146750524109,
+    "n_positive": 83475,
+    "n_total": 363542,
+    "eval_split": "internal_test",
+    "threshold_source": "quantile of 278371 benign val windows @ FPR=0.01",
+    "target_fpr": 0.01
+  },
+  "detection_by_label": {
+    "Bot": {
+      "roc_auc": 0.3494408325064499,
+      "n_positive": 298,
+      "n_benign_compared": 280067
+    },
+    "DDoS": {
+      "roc_auc": 0.9980601059674278,
+      "n_positive": 19204,
+      "n_benign_compared": 280067
+    },
+    "DoS GoldenEye": {
+      "roc_auc": 0.9987070477114105,
+      "n_positive": 1545,
+      "n_benign_compared": 280067
+    },
+    "DoS Hulk": {
+      "roc_auc": 0.9994987355111861,
+      "n_positive": 34519,
+      "n_benign_compared": 280067
+    },
+    "DoS Slowhttptest": {
+      "roc_auc": 0.9992061308124722,
+      "n_positive": 826,
+      "n_benign_compared": 280067
+    },
+    "DoS slowloris": {
+      "roc_auc": 0.9971349220254316,
+      "n_positive": 870,
+      "n_benign_compared": 280067
+    },
+    "FTP-Patator": {
+      "roc_auc": 0.9970905006876472,
+      "n_positive": 1191,
+      "n_benign_compared": 280067
+    },
+    "PortScan": {
+      "roc_auc": 0.9981444706816779,
+      "n_positive": 23822,
+      "n_benign_compared": 280067
+    },
+    "SSH-Patator": {
+      "roc_auc": 0.996138013609141,
+      "n_positive": 870,
+      "n_benign_compared": 280067
+    },
+    "Web Attack \u2013 Brute Force": {
+      "roc_auc": 0.9992466717647754,
+      "n_positive": 227,
+      "n_benign_compared": 280067
+    },
+    "Web Attack \u2013 Sql Injection": {
+      "roc_auc": 0.9979460272006342,
+      "n_positive": 4,
+      "n_benign_compared": 280067
+    },
+    "Web Attack \u2013 XSS": {
+      "roc_auc": 0.9995597734495927,
+      "n_positive": 99,
+      "n_benign_compared": 280067
+    }
+  },
+  "detection_comparison": {
+    "combo_score": {
+      "overall": {
+        "score_col": "combo_score",
+        "roc_auc": 0.9963483697398285,
+        "pr_auc": 0.9902241226262166,
+        "precision_at_thresh": 0.9833518445535213,
+        "recall_at_thresh": 0.9863911350703803,
+        "f1_at_thresh": 0.9848691450169849,
+        "alert_z_thresh": 3.3655600590342862,
+        "detection_at_fpr_1pct": 0.9917939502845163,
+        "detection_at_fpr_0_1pct": 0.7090146750524109,
+        "n_positive": 83475,
+        "n_total": 363542
+      },
+      "by_label": {
+        "Bot": {
+          "roc_auc": 0.3494408325064499,
+          "n_positive": 298,
+          "n_benign_compared": 280067
+        },
+        "DDoS": {
+          "roc_auc": 0.9980601059674278,
+          "n_positive": 19204,
+          "n_benign_compared": 280067
+        },
+        "DoS GoldenEye": {
+          "roc_auc": 0.9987070477114105,
+          "n_positive": 1545,
+          "n_benign_compared": 280067
+        },
+        "DoS Hulk": {
+          "roc_auc": 0.9994987355111861,
+          "n_positive": 34519,
+          "n_benign_compared": 280067
+        },
+        "DoS Slowhttptest": {
+          "roc_auc": 0.9992061308124722,
+          "n_positive": 826,
+          "n_benign_compared": 280067
+        },
+        "DoS slowloris": {
+          "roc_auc": 0.9971349220254316,
+          "n_positive": 870,
+          "n_benign_compared": 280067
+        },
+        "FTP-Patator": {
+          "roc_auc": 0.9970905006876472,
+          "n_positive": 1191,
+          "n_benign_compared": 280067
+        },
+        "PortScan": {
+          "roc_auc": 0.9981444706816779,
+          "n_positive": 23822,
+          "n_benign_compared": 280067
+        },
+        "SSH-Patator": {
+          "roc_auc": 0.996138013609141,
+          "n_positive": 870,
+          "n_benign_compared": 280067
+        },
+        "Web Attack \u2013 Brute Force": {
+          "roc_auc": 0.9992466717647754,
+          "n_positive": 227,
+          "n_benign_compared": 280067
+        },
+        "Web Attack \u2013 Sql Injection": {
+          "roc_auc": 0.9979460272006342,
+          "n_positive": 4,
+          "n_benign_compared": 280067
+        },
+        "Web Attack \u2013 XSS": {
+          "roc_auc": 0.9995597734495927,
+          "n_positive": 99,
+          "n_benign_compared": 280067
+        }
+      }
+    },
+    "entity_nll_z": {
+      "overall": {
+        "score_col": "entity_nll_z",
+        "roc_auc": 0.49501636918987657,
+        "pr_auc": 0.41418334113092903,
+        "precision_at_thresh": 0.06539864512767066,
+        "recall_at_thresh": 0.003006888289907158,
+        "f1_at_thresh": 0.005749430210850618,
+        "alert_z_thresh": 3.5329630884161425,
+        "detection_at_fpr_1pct": 0.00027553159628631327,
+        "detection_at_fpr_0_1pct": 0.0,
+        "n_positive": 83475,
+        "n_total": 363542
+      },
+      "by_label": {
+        "Bot": {
+          "roc_auc": 0.5104693488612253,
+          "n_positive": 298,
+          "n_benign_compared": 280067
+        },
+        "DDoS": {
+          "roc_auc": 0.977262508666814,
+          "n_positive": 19204,
+          "n_benign_compared": 280067
+        },
+        "DoS GoldenEye": {
+          "roc_auc": 0.8383844397473869,
+          "n_positive": 1545,
+          "n_benign_compared": 280067
+        },
+        "DoS Hulk": {
+          "roc_auc": 0.4381182552598804,
+          "n_positive": 34519,
+          "n_benign_compared": 280067
+        },
+        "DoS Slowhttptest": {
+          "roc_auc": 0.4559214778345455,
+          "n_positive": 826,
+          "n_benign_compared": 280067
+        },
+        "DoS slowloris": {
+          "roc_auc": 0.46558232432805796,
+          "n_positive": 870,
+          "n_benign_compared": 280067
+        },
+        "FTP-Patator": {
+          "roc_auc": 0.8045656473402878,
+          "n_positive": 1191,
+          "n_benign_compared": 280067
+        },
+        "PortScan": {
+          "roc_auc": 0.1537287520892659,
+          "n_positive": 23822,
+          "n_benign_compared": 280067
+        },
+        "SSH-Patator": {
+          "roc_auc": 0.6165536087444428,
+          "n_positive": 870,
+          "n_benign_compared": 280067
+        },
+        "Web Attack \u2013 Brute Force": {
+          "roc_auc": 0.14048269978947298,
+          "n_positive": 227,
+          "n_benign_compared": 280067
+        },
+        "Web Attack \u2013 Sql Injection": {
+          "roc_auc": 0.6267848407702443,
+          "n_positive": 4,
+          "n_benign_compared": 280067
+        },
+        "Web Attack \u2013 XSS": {
+          "roc_auc": 0.10610292998792895,
+          "n_positive": 99,
+          "n_benign_compared": 280067
+        }
+      }
+    }
   }
 }
