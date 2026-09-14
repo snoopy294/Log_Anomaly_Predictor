@@ -103,9 +103,12 @@ def parse_args():
     p.add_argument("--top_k_alerts", type=int, default=300)
     p.add_argument("--alert_z_thresh", type=float, default=3.0)
     p.add_argument("--max_alerts_per_entity", type=int, default=10)
-    p.add_argument("--combo_thresh", type=float, default=2.0,
-                   help="Operating threshold on combo_score (mean |robust z| of window features) "
-                        "for precision/recall in detection_heldout.")
+    p.add_argument("--alert_score", type=str, default="combo_score", choices=["combo_score", "entity_nll_z"],
+                   help="Score that drives alerts and the headline detection metrics.")
+    p.add_argument("--target_fpr", type=float, default=0.01,
+                   help="Operating threshold = score quantile giving this FPR on BENIGN val windows.")
+    p.add_argument("--alert_thresh", type=float, default=None,
+                   help="Fixed threshold on --alert_score (overrides val-benign calibration).")
 
     # allowlist suppression
     p.add_argument("--allowlist_top_dst", type=int, default=0)
@@ -196,7 +199,8 @@ def plot_nll_hist(nll: np.ndarray, out_path: str):
     plt.savefig(out_path, dpi=150)
     plt.close()
 
-def plot_entity_timelines(all_scores_df: pd.DataFrame, alerts_df: pd.DataFrame, out_dir: str, max_entities: int = 50):
+def plot_entity_timelines(all_scores_df: pd.DataFrame, alerts_df: pd.DataFrame, out_dir: str, max_entities: int = 50,
+                          score_col: str = "entity_nll_z"):
     ensure_dir(out_dir)
     import matplotlib.pyplot as plt
 
@@ -228,14 +232,14 @@ def plot_entity_timelines(all_scores_df: pd.DataFrame, alerts_df: pd.DataFrame, 
             continue
 
         plt.figure()
-        plt.plot(g["timestamp"], g["entity_nll_z"], label="entity_nll_z")
+        plt.plot(g["timestamp"], g[score_col], label=score_col)
         ga = g[g["is_alert"]]
         if len(ga) > 0:
-            plt.scatter(ga["timestamp"], ga["entity_nll_z"], label="alert_point", zorder=3)
+            plt.scatter(ga["timestamp"], ga[score_col], label="alert_point", zorder=3)
 
         plt.title(f"Entity timeline: {ent}")
         plt.xlabel("Time")
-        plt.ylabel("Entity NLL z-score")
+        plt.ylabel(score_col)
         plt.legend()
         plt.tight_layout()
         safe_ent = str(ent).replace("/", "_").replace("\\", "_").replace(" ", "_")
@@ -299,6 +303,8 @@ def export_alert_packets(alerts_df: pd.DataFrame, df_all_events: pd.DataFrame, s
             "packet_path": fpath,
             "entity_nll_z": float(row.get("entity_nll_z", np.nan)),
             "anomaly_score_nll": float(row.get("anomaly_score_nll", np.nan)),
+            "combo_score": float(row.get("combo_score", np.nan)),
+            "top_feature": row.get("top_feature", ""),
             "true_next_event": row.get("true_next_event", ""),
             "reason": row.get("reason", ""),
         })
@@ -764,6 +770,44 @@ def baseline_last_token_accuracy(X: np.ndarray, y: np.ndarray):
         return float("nan")
     return float((X[:, -1] == y).mean())
 
+def entity_nll_z_from_stats(nll: np.ndarray, entities: np.ndarray, entity_stats: pd.DataFrame,
+                            global_mean: float, global_std: float) -> np.ndarray:
+    """NLL z-score against TRAIN per-entity stats; unseen entities use the global stats."""
+    stats = entity_stats.copy()
+    stats["entity_id"] = stats["entity_id"].astype(str)
+    df = pd.DataFrame({"entity_id": entities.astype(str), "nll": nll.astype(float)})
+    df = df.merge(stats, on="entity_id", how="left")
+    if global_std is None or (not np.isfinite(global_std)) or global_std <= 0:
+        global_std = 1e-6
+    mean = df["mean_nll"].fillna(global_mean)
+    std = df["std_nll"].fillna(global_std).replace(0, 1e-6)
+    return ((df["nll"] - mean) / std).to_numpy()
+
+def calibrate_threshold(benign_scores: np.ndarray, target_fpr: float) -> float:
+    """Threshold whose FPR on the given benign scores is ~target_fpr.
+    Must be fed held-out benign windows (val), never the split being reported."""
+    s = np.asarray(benign_scores, dtype=np.float64)
+    s = s[np.isfinite(s)]
+    if len(s) == 0:
+        return float("nan")
+    return float(np.quantile(s, 1.0 - float(target_fpr), method="higher"))
+
+def select_alerts(scores_all: pd.DataFrame, score_col: str, thresh: float, top_k: int,
+                  max_per_entity: int, allowlist_dst: set[str] | None = None,
+                  allowlist_margin: float = 1.5) -> pd.DataFrame:
+    cand = scores_all.sort_values(score_col, ascending=False)
+    cand = cand[cand[score_col] >= float(thresh)]
+
+    if allowlist_dst:
+        allowlist_dst = set(map(str, allowlist_dst))
+        is_allow = cand["dst_parsed"].isin(allowlist_dst)
+        cand = cand[~is_allow | (cand[score_col] >= float(thresh + allowlist_margin))]
+
+    if "entity_id" in cand.columns and top_k > 0:
+        cand = cand.groupby("entity_id", sort=False, as_index=False).head(int(max_per_entity))
+
+    return cand.head(top_k).copy()
+
 def parse_dst_from_token(token_str: str) -> str:
     parts = str(token_str).split("|")
     for p in parts:
@@ -781,30 +825,19 @@ def score_anomalies_df(nll: np.ndarray, top_ids: np.ndarray, top_ps: np.ndarray,
                        global_std: float | None = None,
                        allowlist_dst: set[str] | None = None,
                        allowlist_margin: float = 1.5):
-    df_tmp = pd.DataFrame({
-        "entity_id": entities.astype(str),
-        "nll": nll.astype(float)
-    })
-
     if entity_stats is not None:
-        stats = entity_stats.copy()
-        stats["entity_id"] = stats["entity_id"].astype(str)
-        df_tmp = df_tmp.merge(stats, on="entity_id", how="left")
-
         if global_mean is None:
             global_mean = float(np.mean(nll))
         if global_std is None or (not np.isfinite(global_std)) or global_std <= 0:
             global_std = float(np.std(nll)) if float(np.std(nll)) > 0 else 1e-6
-
-        df_tmp["mean_nll"] = df_tmp["mean_nll"].fillna(global_mean)
-        df_tmp["std_nll"] = df_tmp["std_nll"].fillna(global_std).replace(0, 1e-6)
+        entity_nll_z = pd.Series(entity_nll_z_from_stats(nll, entities, entity_stats, global_mean, global_std))
     else:
+        df_tmp = pd.DataFrame({"entity_id": entities.astype(str), "nll": nll.astype(float)})
         stats = df_tmp.groupby("entity_id")["nll"].agg(["mean", "std"]).reset_index()
         stats.columns = ["entity_id", "mean_nll", "std_nll"]
         df_tmp = df_tmp.merge(stats, on="entity_id", how="left")
         df_tmp["std_nll"] = df_tmp["std_nll"].fillna(1e-6).replace(0, 1e-6)
-
-    entity_nll_z = (df_tmp["nll"] - df_tmp["mean_nll"]) / df_tmp["std_nll"]
+        entity_nll_z = (df_tmp["nll"] - df_tmp["mean_nll"]) / df_tmp["std_nll"]
 
     reasons = []
     for z in entity_nll_z:
@@ -848,20 +881,8 @@ def score_anomalies_df(nll: np.ndarray, top_ids: np.ndarray, top_ps: np.ndarray,
 
     scores_all["dst_parsed"] = scores_all["true_next_event"].apply(parse_dst_from_token)
 
-    scores_sorted = scores_all.sort_values("entity_nll_z", ascending=False)
-    cand = scores_sorted[scores_sorted["entity_nll_z"] >= float(z_thresh)].copy()
-
-    if allowlist_dst:
-        allowlist_dst = set(map(str, allowlist_dst))
-        is_allow = cand["dst_parsed"].isin(allowlist_dst)
-        cand = cand[~is_allow | (cand["entity_nll_z"] >= float(z_thresh + allowlist_margin))].copy()
-
-    if "entity_id" in cand.columns and top_k > 0:
-        cand = (cand.sort_values("entity_nll_z", ascending=False)
-                    .groupby("entity_id", sort=False, as_index=False)
-                    .head(int(max_alerts_per_entity)))
-
-    alerts_df = cand.head(top_k).copy()
+    alerts_df = select_alerts(scores_all, "entity_nll_z", z_thresh, top_k, max_alerts_per_entity,
+                              allowlist_dst, allowlist_margin)
     return scores_all, alerts_df
 
 def detection_metrics(scores_df, score_col, positive_labels=None, alert_z_thresh=3.0):
@@ -1236,21 +1257,47 @@ def main():
     scores_all["split"] = split_alert
     scores_all["combo_score"] = combo_score(z_alert)
     scores_all = pd.concat([scores_all, z_alert], axis=1)
-    alerts["combo_score"] = scores_all.loc[alerts.index, "combo_score"].to_numpy()
+    scores_all["top_feature"] = z_alert.abs().idxmax(axis=1).str.removeprefix("z_").to_numpy()
+    if args.alert_score == "combo_score":
+        scores_all["reason"] = scores_all["top_feature"] + " deviates from entity baseline"
 
-    det_metrics = detection_metrics(scores_all, score_col="entity_nll_z", alert_z_thresh=args.alert_z_thresh)
-    metrics_summary["detection"] = det_metrics
-    metrics_summary["detection_by_label"] = detection_metrics_by_label(scores_all, score_col="entity_nll_z")
-
-    # Held-out only (excludes TRAIN windows, whose baselines were fit on themselves)
-    held = scores_all[scores_all["split"] != "train"]
-    metrics_summary["detection_heldout"] = {
-        "entity_nll_z": detection_metrics(held, score_col="entity_nll_z", alert_z_thresh=args.alert_z_thresh),
-        "combo_score": detection_metrics(held, score_col="combo_score", alert_z_thresh=args.combo_thresh),
+    # 11c) Operating thresholds from BENIGN val windows only — test labels never
+    # influence the threshold, so test precision/recall are honest.
+    benign_labels = {"Normal", "BENIGN", "0", ""}
+    feats_va = make_window_features(df_va, tok_map, args.seq_len, args.step)
+    feats_va["nll"] = nll_val
+    val_scores = {
+        "combo_score": combo_score(robust_window_z(feats_va, eva, win_baselines)),
+        "entity_nll_z": entity_nll_z_from_stats(nll_val, eva, ent_stats_df, global_mean, global_std),
     }
-    metrics_summary["detection_by_label_heldout"] = {
-        "entity_nll_z": detection_metrics_by_label(held, score_col="entity_nll_z"),
-        "combo_score": detection_metrics_by_label(held, score_col="combo_score"),
+    val_benign = pd.Series(lva.astype(str)).isin(benign_labels).to_numpy()
+    fallback_thresh = {"combo_score": 2.0, "entity_nll_z": args.alert_z_thresh}
+    thresholds = {}
+    for col, s in val_scores.items():
+        thr = calibrate_threshold(s[val_benign], args.target_fpr)
+        thresholds[col] = thr if np.isfinite(thr) else fallback_thresh[col]
+    thresh_source = f"quantile of {int(val_benign.sum())} benign val windows @ FPR={args.target_fpr}"
+    if args.alert_thresh is not None:
+        thresholds[args.alert_score] = float(args.alert_thresh)
+        thresh_source = "--alert_thresh"
+
+    alerts = select_alerts(scores_all, args.alert_score, thresholds[args.alert_score],
+                           args.top_k_alerts, args.max_alerts_per_entity,
+                           allowlist_dst if len(allowlist_dst) else None, args.allowlist_margin)
+
+    # Headline metrics on the held-out test split only (never train, whose
+    # baselines were fit on themselves, nor val, which set the threshold).
+    eval_split_name = "external_test" if alert_tag == "external_test" else "internal_test"
+    ev = scores_all[scores_all["split"] == eval_split_name]
+    det_metrics = detection_metrics(ev, score_col=args.alert_score, alert_z_thresh=thresholds[args.alert_score])
+    det_metrics.update({"eval_split": eval_split_name, "threshold_source": thresh_source,
+                        "target_fpr": args.target_fpr})
+    metrics_summary["detection"] = det_metrics
+    metrics_summary["detection_by_label"] = detection_metrics_by_label(ev, score_col=args.alert_score)
+    metrics_summary["detection_comparison"] = {
+        col: {"overall": detection_metrics(ev, score_col=col, alert_z_thresh=thresholds[col]),
+              "by_label": detection_metrics_by_label(ev, score_col=col)}
+        for col in ("combo_score", "entity_nll_z")
     }
     with open(os.path.join(out_dir, "metrics_summary.json"), "w") as f:
         json.dump(metrics_summary, f, indent=2)
@@ -1259,7 +1306,8 @@ def main():
     alerts.to_csv(alerts_path, index=False)
 
     timelines_dir = os.path.join(out_dir, f"entity_timelines_{alert_tag}")
-    plot_entity_timelines(scores_all, alerts, out_dir=timelines_dir, max_entities=args.plot_max_entities)
+    plot_entity_timelines(scores_all, alerts, out_dir=timelines_dir, max_entities=args.plot_max_entities,
+                          score_col=args.alert_score)
 
     if args.export_alert_packets:
         packets_dir = args.alert_packets_dir
