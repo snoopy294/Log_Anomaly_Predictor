@@ -1026,8 +1026,12 @@ def main():
             return {"loss": float("nan"), "acc": float("nan"), "top5_acc": float("nan"),
                     "baseline_last_token_acc": float("nan"), "perplexity": float("nan"),
                     "mean_nll": float("nan"), "p95_nll": float("nan"), "n_sequences": 0}
-        y_oh = tf.one_hot(y, depth=vocab_size)
-        loss, acc, top5 = best_model.evaluate(X, y_oh, batch_size=512, verbose=0)
+        # One-hot the whole split at once would OOM on GPU for large vocabs
+        # (e.g. [361822, 9851] ~ 14GB) — one-hot per batch via tf.data instead.
+        eval_ds = tf.data.Dataset.from_tensor_slices((X, y)).batch(512).map(
+            lambda xb, yb: (xb, tf.one_hot(yb, depth=vocab_size))
+        )
+        loss, acc, top5 = best_model.evaluate(eval_ds, verbose=0)
         nll = compute_nll_only(best_model, X, y)
         return {
             "loss": float(loss),
