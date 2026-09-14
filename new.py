@@ -390,8 +390,21 @@ def split_entity_holdout(df: pd.DataFrame, train_frac: float, val_frac: float, s
     return df_tr, df_va, df_te
 
 def split_time_within_groups(df: pd.DataFrame, train_frac: float, val_frac: float):
+    """Chronologically split each (entity_id, Label) sub-stream 70/15/15.
+
+    Grouping by entity alone (not label) would put a whole attack type
+    entirely into one split whenever that attack's traffic is clustered
+    in time relative to an entity's other traffic (e.g. CICIDS, where
+    each day is a different attack against the same victim host) — the
+    attack would never reach val/test, so it could never be evaluated.
+    Splitting within each (entity_id, Label) pair keeps every label's
+    time-ordering intact while guaranteeing it gets a proportional slice
+    of train/val/test regardless of when it falls in the entity's overall
+    timeline.
+    """
     tr_parts, va_parts, te_parts = [], [], []
-    for _, g in df.groupby("entity_id", sort=False):
+    group_cols = ["entity_id", "Label"] if "Label" in df.columns else ["entity_id"]
+    for _, g in df.groupby(group_cols, sort=False):
         g2 = g.sort_values("timestamp")
         n = len(g2)
         n_train = int(n * train_frac)
