@@ -26,7 +26,13 @@ row and label counts, exact temporal boundaries, configuration, seed, and enviro
 ## Results
 
 <!-- RESULTS:START -->
-_No leak-safe benchmark has been published yet._
+All headline values use thresholds frozen on held-out benign calibration traffic.
+
+| Dataset / experiment | Seeds | Recall | Precision | F1 | Test FPR | Benign alerts / 10k |
+|---|---:|---:|---:|---:|---:|---:|
+| CICIDS2017 (cicids_days split) | 42, 43, 44 | 98.42 ± 1.09% | 92.12 ± 0.52% | 95.16 ± 0.58% | 3.86 ± 0.28% | 386.18 ± 28.36 |
+
+Diagnostic ROC-derived TPR values, when present in artifacts, are not frozen-threshold results.
 <!-- RESULTS:END -->
 
 The previous label-balanced split results were removed because labels influenced row

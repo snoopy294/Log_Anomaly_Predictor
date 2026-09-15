@@ -1,0 +1,111 @@
+{
+  "schema_version": "1.0",
+  "datasets": {
+    "CICIDS2017 (cicids_days split)": {
+      "seeds": [
+        42,
+        43,
+        44
+      ],
+      "aggregate": {
+        "recall": {
+          "mean": 0.9841577821754934,
+          "std": 0.010858083019889572
+        },
+        "precision": {
+          "mean": 0.9212366827515074,
+          "std": 0.0052174293851474
+        },
+        "f1": {
+          "mean": 0.951621301450195,
+          "std": 0.00578709579110291
+        },
+        "observed_test_fpr": {
+          "mean": 0.03861844630155931,
+          "std": 0.00283645596144087
+        },
+        "benign_alerts_per_10000_events": {
+          "mean": 386.1844630155931,
+          "std": 28.364559614408698
+        }
+      },
+      "runs": [
+        {
+          "seed": 42,
+          "frozen_operating_point": {
+            "threshold": 4.297994232258838,
+            "calibration_population": {
+              "split": "validation",
+              "benign_windows": 370036,
+              "target_fpr": 0.01,
+              "labels_used_for_threshold": false
+            },
+            "confusion": {
+              "tp": 525775,
+              "fp": 44866,
+              "tn": 1138092,
+              "fn": 16931
+            },
+            "recall": 0.968802629784819,
+            "tpr": 0.968802629784819,
+            "precision": 0.9213761366603521,
+            "f1": 0.9444943939310926,
+            "observed_test_fpr": 0.03792695936795727,
+            "benign_alerts_per_10000_events": 379.2695936795727
+          },
+          "artifact": "outputs/runs/cicids2017/seed-42/metrics_summary.json"
+        },
+        {
+          "seed": 43,
+          "frozen_operating_point": {
+            "threshold": 4.364467028070478,
+            "calibration_population": {
+              "split": "validation",
+              "benign_windows": 370036,
+              "target_fpr": 0.01,
+              "labels_used_for_threshold": false
+            },
+            "confusion": {
+              "tp": 538333,
+              "fp": 42045,
+              "tn": 1140913,
+              "fn": 4373
+            },
+            "recall": 0.9919422302314697,
+            "tpr": 0.9919422302314697,
+            "precision": 0.9275558343010935,
+            "f1": 0.9586691645504699,
+            "observed_test_fpr": 0.03554225931943484,
+            "benign_alerts_per_10000_events": 355.4225931943484
+          },
+          "artifact": "outputs/runs/cicids2017/seed-43/metrics_summary.json"
+        },
+        {
+          "seed": 44,
+          "frozen_operating_point": {
+            "threshold": 4.320488259930858,
+            "calibration_population": {
+              "split": "validation",
+              "benign_windows": 370036,
+              "target_fpr": 0.01,
+              "labels_used_for_threshold": false
+            },
+            "confusion": {
+              "tp": 538217,
+              "fp": 50141,
+              "tn": 1132817,
+              "fn": 4489
+            },
+            "recall": 0.9917284865101915,
+            "tpr": 0.9917284865101915,
+            "precision": 0.9147780772930767,
+            "f1": 0.9517003458690224,
+            "observed_test_fpr": 0.04238612021728582,
+            "benign_alerts_per_10000_events": 423.8612021728582
+          },
+          "artifact": "outputs/runs/cicids2017/seed-44/metrics_summary.json"
+        }
+      ]
+    }
+  }
+}
