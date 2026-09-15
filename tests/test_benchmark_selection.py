@@ -1,6 +1,54 @@
+import numpy as np
 import pandas as pd
 
 from benchmark import improvement_gate, multi_timescale_features, screen_candidates
+
+
+def _multi_timescale_features_reference(events: pd.DataFrame, windows) -> pd.DataFrame:
+    """Brute-force reference matching the pre-vectorization semantics (small inputs only)."""
+    ordered = events.sort_values(["entity_id", "timestamp"], kind="stable").copy()
+    result = pd.DataFrame(index=ordered.index)
+    for entity, group in ordered.groupby("entity_id", sort=False):
+        ts = pd.to_datetime(group["timestamp"], utc=True).astype("int64").to_numpy() / 1e9
+        token = group["event_type"].astype(str).to_numpy()
+        peer = group["dst_id"].astype(str).to_numpy()
+        byte = np.log1p(np.clip(group["bytes"].to_numpy(float), 0, None))
+        port = group["event_type"].astype(str).str.rsplit(":", n=1).str[-1].to_numpy()
+        for width in windows:
+            rows = []
+            for i in range(len(group)):
+                start = max(0, i - width + 1)
+                n = i - start + 1
+                duration = max(ts[i] - ts[start], 1.0)
+                _, counts = np.unique(token[start:i + 1], return_counts=True)
+                history = set(peer[max(0, start - width):start])
+                current_peers = set(peer[start:i + 1])
+                rows.append((n / duration, counts.max() / n,
+                             len(current_peers - history) / max(1, len(current_peers)),
+                             len(set(port[start:i + 1])), float(byte[start:i + 1].mean()),
+                             float(byte[start:i + 1].std()), len(current_peers)))
+            names = ("rate", "repetition", "peer_novelty", "port_diversity",
+                     "bytes_mean", "bytes_std", "fanout")
+            for pos, name in enumerate(names):
+                result.loc[group.index, f"w{width}_{name}"] = [row[pos] for row in rows]
+    return result.sort_index().reset_index(drop=True)
+
+
+def test_multiscale_features_matches_reference_on_random_multientity_data():
+    rng = np.random.default_rng(7)
+    n = 300
+    frame = pd.DataFrame({
+        "timestamp": pd.Timestamp("2020-01-01", tz="UTC") + pd.to_timedelta(
+            np.cumsum(rng.integers(1, 5, size=n)), unit="s"),
+        "entity_id": rng.choice(["e1", "e2", "e3"], size=n),
+        "event_type": rng.choice(["tcp:80", "tcp:443", "udp:53"], size=n),
+        "dst_id": rng.choice(["a", "b", "c", "d"], size=n),
+        "bytes": rng.integers(0, 5000, size=n).astype(float),
+    })
+    windows = (3, 8)
+    expected = _multi_timescale_features_reference(frame, windows)
+    actual = multi_timescale_features(frame, windows=windows)
+    pd.testing.assert_frame_equal(expected, actual, check_dtype=False, atol=1e-8)
 
 
 def test_candidate_selection_uses_macro_recall_then_precision_then_latency():

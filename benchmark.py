@@ -23,33 +23,83 @@ CANDIDATES = ("transformer_nll", "equal_weight_combined", "multi_timescale", "is
 REFERENCE_SEEDS = (42, 43, 44)
 
 
+def _windowed(cumulative: np.ndarray, width: int) -> np.ndarray:
+    """Trailing window sum ending at each row, from a running cumulative sum.
+
+    Row i covers indices [max(0, i - width + 1), i]; equivalent to
+    cumulative[i] - cumulative[i - width] (treating negative index as 0).
+    """
+    shifted = np.zeros_like(cumulative)
+    if width < len(cumulative):
+        shifted[width:] = cumulative[:-width]
+    return cumulative - shifted
+
+
 def multi_timescale_features(events: pd.DataFrame, windows=(8, 32, 128)) -> pd.DataFrame:
     """Causal behavior features at fixed short/medium/long event horizons."""
     ordered = events.sort_values(["entity_id", "timestamp"], kind="stable").copy()
     result = pd.DataFrame(index=ordered.index)
     for entity, group in ordered.groupby("entity_id", sort=False):
+        n = len(group)
+        pos = np.arange(n)
         ts = pd.to_datetime(group["timestamp"], utc=True).astype("int64").to_numpy() / 1e9
         token = group["event_type"].astype(str).to_numpy()
         peer = group["dst_id"].astype(str).to_numpy()
         byte = np.log1p(np.clip(group["bytes"].to_numpy(float), 0, None))
         port = group["event_type"].astype(str).str.rsplit(":", n=1).str[-1].to_numpy()
+
+        token_codes, _ = pd.factorize(token)
+        port_codes, _ = pd.factorize(port)
+        peer_codes, peer_uniques = pd.factorize(peer)
+
+        token_onehot = np.zeros((n, token_codes.max() + 1), dtype=np.int32)
+        token_onehot[pos, token_codes] = 1
+        port_onehot = np.zeros((n, port_codes.max() + 1), dtype=np.int32)
+        port_onehot[pos, port_codes] = 1
+        peer_onehot = np.zeros((n, len(peer_uniques)), dtype=np.int32)
+        peer_onehot[pos, peer_codes] = 1
+
+        token_cum = np.cumsum(token_onehot, axis=0)
+        port_cum = np.cumsum(port_onehot, axis=0)
+        peer_cum = np.cumsum(peer_onehot, axis=0)
+        byte_cum = np.cumsum(byte)
+        byte_sq_cum = np.cumsum(byte * byte)
+
         for width in windows:
-            rows = []
-            for i in range(len(group)):
-                start = max(0, i - width + 1)
-                n = i - start + 1
-                duration = max(ts[i] - ts[start], 1.0)
-                _, counts = np.unique(token[start:i + 1], return_counts=True)
-                history = set(peer[max(0, start - width):start])
-                current_peers = set(peer[start:i + 1])
-                rows.append((n / duration, counts.max() / n,
-                             len(current_peers - history) / max(1, len(current_peers)),
-                             len(set(port[start:i + 1])), float(byte[start:i + 1].mean()),
-                             float(byte[start:i + 1].std()), len(current_peers)))
-            names = ("rate", "repetition", "peer_novelty", "port_diversity",
-                     "bytes_mean", "bytes_std", "fanout")
-            for pos, name in enumerate(names):
-                result.loc[group.index, f"w{width}_{name}"] = [row[pos] for row in rows]
+            start = np.maximum(0, pos - width + 1)
+            win_len = pos - start + 1
+
+            duration = np.maximum(ts[pos] - ts[start], 1.0)
+            rate = win_len / duration
+
+            token_win = _windowed(token_cum, width)
+            repetition = token_win.max(axis=1) / win_len
+
+            port_win = _windowed(port_cum, width)
+            port_diversity = (port_win > 0).sum(axis=1)
+
+            peer_win_current = _windowed(peer_cum, width)
+            peer_win_history = np.zeros_like(peer_win_current)
+            if width < n:
+                peer_win_history[width:] = peer_win_current[:-width]
+            current_present = peer_win_current > 0
+            history_present = peer_win_history > 0
+            novel = current_present & ~history_present
+            current_distinct = current_present.sum(axis=1)
+            peer_novelty = novel.sum(axis=1) / np.maximum(1, current_distinct)
+            fanout = current_distinct
+
+            bytes_sum = _windowed(byte_cum, width)
+            bytes_sq_sum = _windowed(byte_sq_cum, width)
+            bytes_mean = bytes_sum / win_len
+            bytes_var = np.maximum(bytes_sq_sum / win_len - bytes_mean ** 2, 0.0)
+            bytes_std = np.sqrt(bytes_var)
+
+            values = {"rate": rate, "repetition": repetition, "peer_novelty": peer_novelty,
+                     "port_diversity": port_diversity, "bytes_mean": bytes_mean,
+                     "bytes_std": bytes_std, "fanout": fanout}
+            for name, array in values.items():
+                result.loc[group.index, f"w{width}_{name}"] = array
     return result.sort_index().reset_index(drop=True)
 
 
