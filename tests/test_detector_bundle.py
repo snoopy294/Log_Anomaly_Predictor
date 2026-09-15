@@ -37,6 +37,20 @@ def test_unknown_entity_uses_global_nll_and_unknown_token_policy():
     assert result["model_version"] == "test"
 
 
+def test_score_events_passes_through_event_row_id_for_joins():
+    from detector_bundle import score_events
+    events = pd.DataFrame([
+        {"entity_id": "e", "event_type": "tcp:80", "dst_id": "x", "bytes": 1,
+         "timestamp": pd.Timestamp("2020-01-01", tz="UTC"), "Label": "BENIGN", "event_row_id": 10},
+        {"entity_id": "e", "event_type": "tcp:80", "dst_id": "x", "bytes": 1,
+         "timestamp": pd.Timestamp("2020-01-01", tz="UTC"), "Label": "BENIGN", "event_row_id": 11},
+        {"entity_id": "e", "event_type": "tcp:80", "dst_id": "x", "bytes": 1,
+         "timestamp": pd.Timestamp("2020-01-01", tz="UTC"), "Label": "BENIGN", "event_row_id": 12},
+    ])
+    scored = score_events(events, DetectorRuntime(_bundle(), FakeModel()))
+    assert list(scored["event_row_id"]) == [12]
+
+
 def test_flask_and_offline_use_identical_runtime_scoring(monkeypatch):
     import backend
     events = [{"entity_id": "e", "event_type": "tcp:80", "dst_id": "x", "bytes": 1}] * 3

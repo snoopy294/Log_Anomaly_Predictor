@@ -201,5 +201,7 @@ def score_events(events: pd.DataFrame, runtime: DetectorRuntime) -> pd.DataFrame
         if result is not None:
             result["Label"] = str(event.get("Label", ""))
             result["dst_id"] = str(event.get("dst_id", ""))
+            if "event_row_id" in event:
+                result["event_row_id"] = event["event_row_id"]
             rows.append(result)
     return pd.DataFrame(rows)

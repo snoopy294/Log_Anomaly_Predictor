@@ -71,6 +71,16 @@ python scripts/score_zero_shot_unsw.py --csv data/unsw_nb15_full.csv \
   --out outputs/runs/unsw_nb15_zero_shot/cicids-frozen
 ```
 
+Select the winning score variant on the CICIDS development split (July 4) using a
+frozen bundle — this is the candidate-screening step referenced above, using
+development labels only:
+
+```bash
+python scripts/select_candidate.py --csv data/cicids_clean.csv \
+  --bundle models/detector_bundle \
+  --out outputs/runs/candidate_selection/seed-42
+```
+
 Generate the README table only after consolidating complete
 run outputs:
 
@@ -88,6 +98,7 @@ python scripts/render_results.py --summary outputs/benchmark_summary.json
 | `detector_bundle.py` | hashed bundle serialization and shared stateful scoring runtime |
 | `new.py` | model training, calibration, evaluation, and bundle export |
 | `backend.py` | compatible Flask routes backed by the shared detector runtime |
+| `scripts/select_candidate.py` | runs `benchmark.py`'s candidate screening against a real development split |
 | `tests/` | deterministic split, adapter, metric, scoring, and parity fixtures |
 
 The API continues to support the existing routes. Anomaly responses additionally expose
