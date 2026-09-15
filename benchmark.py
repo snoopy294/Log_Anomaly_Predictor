@@ -35,6 +35,45 @@ def _windowed(cumulative: np.ndarray, width: int) -> np.ndarray:
     return cumulative - shifted
 
 
+def _peer_window_stats(peer_codes: np.ndarray, width: int) -> tuple[np.ndarray, np.ndarray]:
+    """Fanout and peer-novelty via a bounded double sliding window.
+
+    Cost is O(n * width) but with O(1) integer dict operations, bounded by the
+    window size (<=128) rather than the entity's total distinct-peer count —
+    unlike a one-hot/cumsum approach, which blows up for high-fanout entities
+    (e.g. a DDoS/PortScan target hit by thousands of distinct source IPs).
+    """
+    n = len(peer_codes)
+    window_current: dict[int, int] = {}
+    window_history: dict[int, int] = {}
+    queue_current: list[int] = []
+    queue_history: list[int] = []
+    fanout = np.empty(n, dtype=np.int64)
+    novelty = np.empty(n, dtype=np.float64)
+    for i in range(n):
+        code = int(peer_codes[i])
+        if len(queue_current) == width:
+            moved = queue_current.pop(0)
+            window_current[moved] -= 1
+            if window_current[moved] == 0:
+                del window_current[moved]
+            if len(queue_history) == width:
+                dropped = queue_history.pop(0)
+                window_history[dropped] -= 1
+                if window_history[dropped] == 0:
+                    del window_history[dropped]
+            queue_history.append(moved)
+            window_history[moved] = window_history.get(moved, 0) + 1
+        queue_current.append(code)
+        window_current[code] = window_current.get(code, 0) + 1
+
+        distinct = len(window_current)
+        novel = sum(1 for key in window_current if key not in window_history)
+        fanout[i] = distinct
+        novelty[i] = novel / max(1, distinct)
+    return fanout, novelty
+
+
 def multi_timescale_features(events: pd.DataFrame, windows=(8, 32, 128)) -> pd.DataFrame:
     """Causal behavior features at fixed short/medium/long event horizons."""
     ordered = events.sort_values(["entity_id", "timestamp"], kind="stable").copy()
@@ -50,18 +89,15 @@ def multi_timescale_features(events: pd.DataFrame, windows=(8, 32, 128)) -> pd.D
 
         token_codes, _ = pd.factorize(token)
         port_codes, _ = pd.factorize(port)
-        peer_codes, peer_uniques = pd.factorize(peer)
+        peer_codes, _ = pd.factorize(peer)
 
         token_onehot = np.zeros((n, token_codes.max() + 1), dtype=np.int32)
         token_onehot[pos, token_codes] = 1
         port_onehot = np.zeros((n, port_codes.max() + 1), dtype=np.int32)
         port_onehot[pos, port_codes] = 1
-        peer_onehot = np.zeros((n, len(peer_uniques)), dtype=np.int32)
-        peer_onehot[pos, peer_codes] = 1
 
         token_cum = np.cumsum(token_onehot, axis=0)
         port_cum = np.cumsum(port_onehot, axis=0)
-        peer_cum = np.cumsum(peer_onehot, axis=0)
         byte_cum = np.cumsum(byte)
         byte_sq_cum = np.cumsum(byte * byte)
 
@@ -78,16 +114,7 @@ def multi_timescale_features(events: pd.DataFrame, windows=(8, 32, 128)) -> pd.D
             port_win = _windowed(port_cum, width)
             port_diversity = (port_win > 0).sum(axis=1)
 
-            peer_win_current = _windowed(peer_cum, width)
-            peer_win_history = np.zeros_like(peer_win_current)
-            if width < n:
-                peer_win_history[width:] = peer_win_current[:-width]
-            current_present = peer_win_current > 0
-            history_present = peer_win_history > 0
-            novel = current_present & ~history_present
-            current_distinct = current_present.sum(axis=1)
-            peer_novelty = novel.sum(axis=1) / np.maximum(1, current_distinct)
-            fanout = current_distinct
+            fanout, peer_novelty = _peer_window_stats(peer_codes, width)
 
             bytes_sum = _windowed(byte_cum, width)
             bytes_sq_sum = _windowed(byte_sq_cum, width)
