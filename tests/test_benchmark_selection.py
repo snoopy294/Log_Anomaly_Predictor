@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+import pytest
 
 from benchmark import improvement_gate, multi_timescale_features, screen_candidates
 
@@ -58,6 +59,18 @@ def test_candidate_selection_uses_macro_recall_then_precision_then_latency():
     out = screen_candidates(frame, ["one", "both"], target_fpr=.01,
                             latency_p95_ms={"one": 1, "both": 2})
     assert out["winner"]["variant"] == "both"
+
+
+def test_candidate_selection_tolerates_unavoidable_one_sample_fpr_overshoot():
+    # 37 benign rows: target_fpr(.1) * 37 = 3.7 is not a whole number, so
+    # calibrate_threshold's quantile(method="higher") + the ">=" comparison in
+    # frozen_operating_point necessarily overshoots to 4/37 (~0.108) rather than
+    # landing exactly on 0.1 -- this must not make every candidate ineligible.
+    frame = pd.DataFrame({"Label": ["BENIGN"] * 37 + ["A"] * 5,
+                          "score": list(range(37)) + [200] * 5})
+    out = screen_candidates(frame, ["score"], target_fpr=0.1)
+    assert out["winner"]["variant"] == "score"
+    assert out["winner"]["fpr"] == pytest.approx(4 / 37)
 
 
 def test_improvement_gate_enforces_all_three_limits():

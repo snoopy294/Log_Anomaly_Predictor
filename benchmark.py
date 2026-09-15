@@ -145,6 +145,13 @@ def screen_candidates(validation: pd.DataFrame, score_columns: list[str], target
     """Select solely on development labels; thresholds use benign rows only."""
     latency_p95_ms = latency_p95_ms or {}
     benign = is_benign(validation["Label"])
+    n_benign = int(benign.sum())
+    # calibrate_threshold's quantile(method="higher") + frozen_operating_point's ">="
+    # comparison can only hit target_fpr exactly when target_fpr * n_benign is a
+    # whole number; otherwise it conservatively overshoots by one benign sample's
+    # worth of FPR. Allow that unavoidable one-sample slack instead of an
+    # effectively-unreachable exact-match tolerance.
+    fpr_tolerance = 1.0 / n_benign if n_benign else 0.0
     rows = []
     for name in score_columns:
         scores = validation[name].to_numpy(float)
@@ -155,7 +162,7 @@ def screen_candidates(validation: pd.DataFrame, score_columns: list[str], target
         rows.append({"variant": name, "threshold": threshold, "macro_attack_family_recall": macro,
                      "precision": overall["precision"], "fpr": overall["observed_test_fpr"],
                      "p95_latency_ms": float(latency_p95_ms.get(name, np.inf))})
-    eligible = [r for r in rows if r["fpr"] <= target_fpr + 1e-12]
+    eligible = [r for r in rows if r["fpr"] <= target_fpr + fpr_tolerance + 1e-12]
     if not eligible:
         raise RuntimeError("no candidate met the validation FPR constraint")
     winner = sorted(eligible, key=lambda r: (-r["macro_attack_family_recall"],
