@@ -69,6 +69,50 @@ def test_flask_and_offline_use_identical_runtime_scoring(monkeypatch):
     assert actual["top_contributing_feature"] == expected["top_contributing_feature"]
 
 
+class TokenDependentFakeModel:
+    """Unlike FakeModel, output depends on the input window (exercises indexing)."""
+
+    def __init__(self, vocab_size: int):
+        self.vocab_size = vocab_size
+
+    def __call__(self, x, training=False):
+        x = np.asarray(x)
+        batch = x.shape[0]
+        logits = np.zeros((batch, self.vocab_size))
+        for row in range(batch):
+            peak = int(x[row].sum()) % self.vocab_size
+            logits[row, peak] = 1.0
+        return logits + 0.01
+
+
+def test_score_events_batched_matches_score_events_one_at_a_time():
+    from detector_bundle import score_events, score_events_batched
+
+    rng = np.random.default_rng(3)
+    n = 40
+    entities = rng.choice(["e1", "e2", "e3"], size=n)
+    events = pd.DataFrame({
+        "entity_id": entities,
+        "event_type": rng.choice(["tcp:80", "tcp:443"], size=n),
+        "dst_id": rng.choice(["a", "b", "c"], size=n),
+        "bytes": rng.integers(0, 2000, size=n).astype(float),
+        "timestamp": pd.Timestamp("2020-01-01", tz="UTC") + pd.to_timedelta(np.arange(n), unit="s"),
+        "Label": ["BENIGN"] * n,
+        "event_row_id": np.arange(n),
+    })
+    bundle = _bundle()
+    vocab_size = len(bundle["vocabulary"]) + 2
+    model = TokenDependentFakeModel(vocab_size)
+
+    expected = score_events(events, DetectorRuntime(bundle, model))
+    actual = score_events_batched(events, DetectorRuntime(bundle, model))
+
+    compare_cols = ["entity_id", "score", "threshold", "nll", "nll_z",
+                    "top_contributing_feature", "is_anomaly", "suppressed", "event_row_id"]
+    pd.testing.assert_frame_equal(expected[compare_cols].reset_index(drop=True),
+                                  actual[compare_cols].reset_index(drop=True))
+
+
 def test_bundle_round_trip_and_payload_hash_validation():
     with tempfile.TemporaryDirectory(dir="tmp") as directory:
         tmp_path = Path(directory)

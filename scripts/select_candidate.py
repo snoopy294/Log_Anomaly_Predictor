@@ -19,7 +19,7 @@ from benchmark import (CANDIDATES, fit_isolation_forest, isolation_scores,
                        multi_timescale_features, screen_candidates, write_run_manifest)
 from benchmark_metrics import is_benign
 from datasets import cicids_day_split
-from detector_bundle import DetectorRuntime, load_detector_bundle, score_events
+from detector_bundle import DetectorRuntime, load_detector_bundle, score_events_batched
 from new import combo_score, fit_window_baselines, load_and_adapt_events, robust_window_z
 
 
@@ -31,7 +31,7 @@ def run_candidate_selection(train_benign: pd.DataFrame, development: pd.DataFram
     the frozen `bundle`/`model` already encode transformer_nll and
     equal_weight_combined (combo_score) fit on the original training split.
     """
-    scored = score_events(development, DetectorRuntime(bundle, model))
+    scored = score_events_batched(development, DetectorRuntime(bundle, model))
     if "event_row_id" not in scored.columns:
         raise ValueError("development events must carry a unique event_row_id column")
 

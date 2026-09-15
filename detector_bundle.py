@@ -150,7 +150,42 @@ class DetectorRuntime:
                          for name in baseline["features"]}
         return float(np.mean(list(contributions.values()))), max(contributions, key=contributions.get)
 
-    def score_event(self, event: dict, *, update: bool = True) -> dict | None:
+    def compute_nll_batch(self, events: pd.DataFrame, batch_size: int = 512) -> dict[Any, float]:
+        """Precompute nll for every event with a full causal context, via batched model calls.
+
+        The model call is a pure function of its input window (no state carried
+        across calls), so this produces identical nll values to calling
+        `score_event` one at a time -- just with far fewer, much larger model
+        calls. Returns a dict from `events.index` label to nll, present only for
+        events that have a full seq_len context (matching score_event's guard).
+        """
+        seq_len = int(self.bundle["seq_len"])
+        ordered = events.sort_values(["entity_id", "timestamp"], kind="stable")
+        context_batches, target_batches, index_batches = [], [], []
+        for _, group in ordered.groupby("entity_id", sort=False):
+            n = len(group)
+            if n <= seq_len:
+                continue
+            tokens = np.asarray([self.token_id(e) for e in group.to_dict("records")], dtype=np.int32)
+            context_batches.append(np.lib.stride_tricks.sliding_window_view(tokens[:-1], seq_len))
+            target_batches.append(tokens[seq_len:])
+            index_batches.append(group.index.to_numpy()[seq_len:])
+        if not context_batches:
+            return {}
+        contexts = np.concatenate(context_batches, axis=0)
+        targets = np.concatenate(target_batches, axis=0)
+        indices = np.concatenate(index_batches, axis=0)
+        nlls = np.empty(len(targets), dtype=float)
+        for start in range(0, len(contexts), batch_size):
+            probs = np.asarray(self.model(contexts[start:start + batch_size], training=False))
+            batch_targets = targets[start:start + batch_size]
+            in_range = batch_targets < probs.shape[1]
+            rows = np.arange(len(batch_targets))
+            picked = np.where(in_range, probs[rows, np.clip(batch_targets, 0, probs.shape[1] - 1)], 1e-9)
+            nlls[start:start + len(batch_targets)] = -np.log(np.clip(picked, 1e-9, 1))
+        return {index: float(nll) for index, nll in zip(indices, nlls)}
+
+    def score_event(self, event: dict, *, update: bool = True, precomputed_nll: float | None = None) -> dict | None:
         entity = str(event.get("entity_id", ""))
         if not entity:
             raise ValueError("entity_id is required")
@@ -158,13 +193,16 @@ class DetectorRuntime:
         context = self.buffers.setdefault(entity, [])[-seq_len:]
         result = None
         if len(context) == seq_len:
-            x = np.asarray([[self.token_id(e) for e in context]], dtype=np.int32)
-            target_id = self.token_id(event)
-            start = time.perf_counter()
-            probs = np.asarray(self.model(x, training=False))[0]
-            self.last_latency_ms = (time.perf_counter() - start) * 1000
-            self.warmed_up = True
-            nll = float(-np.log(np.clip(probs[target_id] if target_id < len(probs) else 1e-9, 1e-9, 1)))
+            if precomputed_nll is not None:
+                nll = precomputed_nll
+            else:
+                x = np.asarray([[self.token_id(e) for e in context]], dtype=np.int32)
+                target_id = self.token_id(event)
+                start = time.perf_counter()
+                probs = np.asarray(self.model(x, training=False))[0]
+                self.last_latency_ms = (time.perf_counter() - start) * 1000
+                self.warmed_up = True
+                nll = float(-np.log(np.clip(probs[target_id] if target_id < len(probs) else 1e-9, 1e-9, 1)))
             mean, std = self.entity_nll.get(entity, (self.bundle["global_nll"]["mean"], self.bundle["global_nll"]["std"]))
             nll_z = float((nll - mean) / max(std, 1e-6))
             features = self._window_features(context, event, nll)
@@ -198,6 +236,28 @@ def score_events(events: pd.DataFrame, runtime: DetectorRuntime) -> pd.DataFrame
     ordered = events.sort_values("timestamp", kind="stable")
     for event in ordered.to_dict("records"):
         result = runtime.score_event(event)
+        if result is not None:
+            result["Label"] = str(event.get("Label", ""))
+            result["dst_id"] = str(event.get("dst_id", ""))
+            if "event_row_id" in event:
+                result["event_row_id"] = event["event_row_id"]
+            rows.append(result)
+    return pd.DataFrame(rows)
+
+
+def score_events_batched(events: pd.DataFrame, runtime: DetectorRuntime, batch_size: int = 512) -> pd.DataFrame:
+    """Offline-only equivalent of score_events, batching model calls for throughput.
+
+    Produces identical output to score_events (same nll, score, threshold,
+    suppression/dedup decisions) since the model call is a pure function of its
+    input window; only the model-call step is batched instead of one-at-a-time.
+    Not for live/streaming serving -- it requires the full frame up front.
+    """
+    nll_by_index = runtime.compute_nll_batch(events, batch_size=batch_size)
+    rows = []
+    ordered = events.sort_values("timestamp", kind="stable")
+    for index, event in zip(ordered.index, ordered.to_dict("records")):
+        result = runtime.score_event(event, precomputed_nll=nll_by_index.get(index))
         if result is not None:
             result["Label"] = str(event.get("Label", ""))
             result["dst_id"] = str(event.get("dst_id", ""))
