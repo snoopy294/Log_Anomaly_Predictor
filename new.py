@@ -31,8 +31,13 @@ from tensorflow import keras
 from tensorflow.keras import layers
 from tensorflow.keras.utils import register_keras_serializable
 import subprocess
-from sklearn.metrics import (roc_auc_score, average_precision_score,
-                             precision_recall_fscore_support, roc_curve)
+import platform
+import sys
+from datasets import (adapt_unsw_nb15, chronological_split, cicids_day_split,
+                      sha256_file, split_manifest)
+from benchmark_metrics import (diagnostic_metrics, frozen_operating_point, per_attack_metrics,
+                               suppression_masks, suppression_metrics, latency_benchmark)
+from detector_bundle import save_detector_bundle
 
 # -----------------------------
 # Utilities
@@ -71,9 +76,9 @@ def parse_args():
     p.add_argument("--test_csv", type=str, default="", help="Optional external test CSV.")
 
     # Keep these flags (base logic), but now CICIDS requires R adapter
-    p.add_argument("--train_format", type=str, default="auto", choices=["auto", "clean", "cicids"],
+    p.add_argument("--train_format", type=str, default="auto", choices=["auto", "clean", "cicids", "unsw"],
                    help="How to interpret train_csv. If cicids, use --use_r_adapter.")
-    p.add_argument("--test_format", type=str, default="auto", choices=["auto", "clean", "cicids"],
+    p.add_argument("--test_format", type=str, default="auto", choices=["auto", "clean", "cicids", "unsw"],
                    help="How to interpret test_csv. If cicids, use --use_r_adapter.")
 
     # sequence params
@@ -83,7 +88,7 @@ def parse_args():
 
     # splitting (applies to TRAIN dataset only; external test_csv is not split)
     p.add_argument("--split_mode", type=str, default="time",
-                   choices=["time", "entity", "time_entity"])
+                   choices=["time", "entity", "time_entity", "cicids_days"])
     p.add_argument("--train_frac", type=float, default=0.7)
     p.add_argument("--val_frac", type=float, default=0.15)
     p.add_argument("--seed", type=int, default=42)
@@ -132,6 +137,9 @@ def parse_args():
 
     # output
     p.add_argument("--out_dir", type=str, default="outputs")
+    p.add_argument("--bundle_dir", type=str, default="models/detector_bundle")
+    p.add_argument("--model_version", type=str, default="1")
+    p.add_argument("--latency_iterations", type=int, default=10000)
 
     # R adapter
     p.add_argument("--use_r_adapter", action="store_true",
@@ -349,6 +357,8 @@ def detect_format_from_df(df: pd.DataFrame) -> str:
         return "clean"
     if {"Timestamp", "Source IP", "Destination IP", "Destination Port", "Protocol"}.issubset(cols):
         return "cicids"
+    if {"Stime", "dstip", "srcip", "proto", "dsport", "sbytes", "dbytes"}.issubset(cols):
+        return "unsw"
     return "unknown"
 
 def load_and_adapt_events(csv_path: str, fmt: str = "auto") -> pd.DataFrame:
@@ -360,6 +370,8 @@ def load_and_adapt_events(csv_path: str, fmt: str = "auto") -> pd.DataFrame:
 
     if fmt == "clean":
         df2 = adapt_clean_csv(df)
+    elif fmt == "unsw":
+        df2 = adapt_unsw_nb15(df)
     elif fmt == "cicids":
         # Python CICIDS adapter removed in this version; must use R converter first.
         raise ValueError(
@@ -401,6 +413,11 @@ def split_entity_holdout(df: pd.DataFrame, train_frac: float, val_frac: float, s
     return df_tr, df_va, df_te
 
 def split_time_within_groups(df: pd.DataFrame, train_frac: float, val_frac: float):
+    """Globally chronological and label-blind (legacy public function name)."""
+    # Historical name retained for API compatibility. The split is now global,
+    # chronological, and never reads Label.
+    return chronological_split(df, train_frac, val_frac)
+
     """Chronologically split each (entity_id, Label) sub-stream 70/15/15.
 
     Grouping by entity alone (not label) would put a whole attack type
@@ -408,7 +425,7 @@ def split_time_within_groups(df: pd.DataFrame, train_frac: float, val_frac: floa
     in time relative to an entity's other traffic (e.g. CICIDS, where
     each day is a different attack against the same victim host) — the
     attack would never reach val/test, so it could never be evaluated.
-    Splitting within each (entity_id, Label) pair keeps every label's
+    Historical implementation notes (unreachable; retained for old source maps):
     time-ordering intact while guaranteeing it gets a proportional slice
     of train/val/test regardless of when it falls in the entity's overall
     timeline.
@@ -470,18 +487,19 @@ def make_token_strings(df: pd.DataFrame, dst_keep: set, bytes_edges: np.ndarray)
     bytes_bucketed = df["bytes"].apply(lambda v: bucket_bytes(v, bytes_edges))
     return df["event_type"].astype(str) + "|" + dst_bucketed + "|" + bytes_bucketed
 
-def build_vocab_from_buckets(dst_keep: set, bytes_edges: np.ndarray):
+def build_vocab_from_buckets(dst_keep: set, bytes_edges: np.ndarray, event_types=None):
     n_b = max(1, len(bytes_edges) - 1)
     bytes_vocab = [f"BYTES_Q{i}" for i in range(n_b)]
 
     dst_vocab = [f"DST={d}" for d in sorted(map(str, dst_keep))]
     dst_vocab.append("DST=OTHER")
 
-    event_types = [
+    default_event_types = [
         "TCP_REGISTERED", "TCP_EPHEMERAL", "UDP_REGISTERED",
         "TCP_WELL_KNOWN", "P0_WELL_KNOWN", "UDP_WELL_KNOWN",
         "UDP_EPHEMERAL"
     ]
+    event_types = sorted(map(str, event_types)) if event_types is not None else default_event_types
 
     vocab = [f"{et}|{dst}|{bq}" for et in event_types for dst in dst_vocab for bq in bytes_vocab]
     tok = {v: i + 2 for i, v in enumerate(vocab)}  # 0 PAD, 1 UNK
@@ -796,7 +814,7 @@ def calibrate_threshold(benign_scores: np.ndarray, target_fpr: float) -> float:
 
 def select_alerts(scores_all: pd.DataFrame, score_col: str, thresh: float, top_k: int,
                   max_per_entity: int, allowlist_dst: set[str] | None = None,
-                  allowlist_margin: float = 1.5) -> pd.DataFrame:
+                  allowlist_margin: float = 1.5, dedup_seconds: int = 0) -> pd.DataFrame:
     cand = scores_all.sort_values(score_col, ascending=False)
     cand = cand[cand[score_col] >= float(thresh)]
 
@@ -804,6 +822,16 @@ def select_alerts(scores_all: pd.DataFrame, score_col: str, thresh: float, top_k
         allowlist_dst = set(map(str, allowlist_dst))
         is_allow = cand["dst_parsed"].isin(allowlist_dst)
         cand = cand[~is_allow | (cand[score_col] >= float(thresh + allowlist_margin))]
+
+    if dedup_seconds > 0 and len(cand):
+        keep, last = [], {}
+        chronological = cand.sort_values("timestamp", kind="stable")
+        for idx, row in chronological.iterrows():
+            entity, timestamp = str(row["entity_id"]), pd.to_datetime(row["timestamp"], utc=True)
+            if entity not in last or (timestamp - last[entity]).total_seconds() >= dedup_seconds:
+                keep.append(idx)
+                last[entity] = timestamp
+        cand = cand.loc[keep].sort_values(score_col, ascending=False)
 
     if "entity_id" in cand.columns and top_k > 0:
         cand = cand.groupby("entity_id", sort=False, as_index=False).head(int(max_per_entity))
@@ -899,44 +927,23 @@ def detection_metrics(scores_df, score_col, positive_labels=None, alert_z_thresh
     scores = scores_df[score_col].values
 
     if len(np.unique(y_true)) < 2:
+        operating_point = frozen_operating_point(scores_df["Label"], scores, alert_z_thresh)
         return {
+            "frozen_operating_point": operating_point,
             "note": "single-class data — detection metrics undefined (no attack labels in dataset)",
             "score_col": score_col,
             "n_positive": int(y_true.sum()),
             "n_total": int(len(y_true)),
         }
 
-    roc_auc = float(roc_auc_score(y_true, scores))
-    pr_auc = float(average_precision_score(y_true, scores))
-
-    # Metrics at operating threshold (entity_nll_z >= alert_z_thresh)
-    y_pred = (scores >= alert_z_thresh).astype(int)
-    prec, rec, f1, _ = precision_recall_fscore_support(y_true, y_pred, average="binary", zero_division=0)
-
-    # Detection rate at low FPR targets
-    fpr_arr, tpr_arr, _ = roc_curve(y_true, scores)
-
-    def tpr_at_fpr(target_fpr):
-        idx = np.searchsorted(fpr_arr, target_fpr, side="right") - 1
-        idx = max(0, min(idx, len(tpr_arr) - 1))
-        return float(tpr_arr[idx])
-
-    return {
-        "score_col": score_col,
-        "roc_auc": roc_auc,
-        "pr_auc": pr_auc,
-        "precision_at_thresh": float(prec),
-        "recall_at_thresh": float(rec),
-        "f1_at_thresh": float(f1),
-        "alert_z_thresh": alert_z_thresh,
-        "detection_at_fpr_1pct": tpr_at_fpr(0.01),
-        "detection_at_fpr_0_1pct": tpr_at_fpr(0.001),
-        "n_positive": int(y_true.sum()),
-        "n_total": int(len(y_true)),
-    }
+    result = {"score_col": score_col, **diagnostic_metrics(scores_df["Label"], scores)}
+    result["frozen_operating_point"] = frozen_operating_point(
+        scores_df["Label"], scores, alert_z_thresh)
+    result.update({"n_positive": int(y_true.sum()), "n_total": int(len(y_true))})
+    return result
 
 
-def detection_metrics_by_label(scores_df, score_col, benign_labels=None):
+def detection_metrics_by_label(scores_df, score_col, benign_labels=None, threshold=3.0):
     """Per-attack-type ROC-AUC breakdown: for each non-benign Label present in
     scores_df, compute ROC-AUC of that label's rows vs. all BENIGN rows using
     score_col. Lets us confirm specific attack types (DoS Hulk, PortScan,
@@ -946,24 +953,11 @@ def detection_metrics_by_label(scores_df, score_col, benign_labels=None):
     if benign_labels is None:
         benign_labels = {"Normal", "BENIGN", "0", ""}
 
-    is_benign = scores_df["Label"].isin(benign_labels)
-    benign_scores = scores_df.loc[is_benign, score_col].values
-
-    out = {}
-    for label in sorted(scores_df.loc[~is_benign, "Label"].unique()):
-        lbl_scores = scores_df.loc[scores_df["Label"] == label, score_col].values
-        n_pos = len(lbl_scores)
-        if n_pos == 0 or len(benign_scores) == 0:
-            continue
-        y_true = np.concatenate([np.zeros(len(benign_scores)), np.ones(n_pos)])
-        y_score = np.concatenate([benign_scores, lbl_scores])
-        if len(np.unique(y_true)) < 2:
-            continue
-        out[str(label)] = {
-            "roc_auc": float(roc_auc_score(y_true, y_score)),
-            "n_positive": int(n_pos),
-            "n_benign_compared": int(len(benign_scores)),
-        }
+    out = per_attack_metrics(scores_df["Label"], scores_df[score_col], threshold)
+    n_benign = int(scores_df["Label"].isin(benign_labels).sum())
+    for values in out.values():
+        values["n_positive"] = values["sample_count"]
+        values["n_benign_compared"] = n_benign
     return out
 
 # -----------------------------
@@ -995,9 +989,8 @@ def main():
 
     df = load_and_adapt_events(train_csv_to_use, fmt=train_fmt_to_use)
 
-    df = filter_entities(df, args.min_events_per_entity)
-    if len(df) == 0:
-        raise RuntimeError("No TRAIN data after filtering entities. Lower --min_events_per_entity.")
+    if args.split_mode == "entity":
+        df = filter_entities(df, args.min_events_per_entity)
 
     # 1b) Optional external test dataset
     df_external_test = None
@@ -1015,11 +1008,22 @@ def main():
             test_fmt_to_use = "clean"
 
         df_external_test = load_and_adapt_events(test_csv_to_use, fmt=test_fmt_to_use)
-        df_external_test = filter_entities(df_external_test, args.seq_len + 1)
 
 
     # 2) Split TRAIN events BEFORE fitting bucketing/vocab
-    if args.split_mode == "time":
+    train_prefiltered = False
+    df_early = None
+    if args.split_mode == "cicids_days":
+        day3, df_va, df_te_internal = cicids_day_split(df)
+        day3 = filter_entities(day3, args.min_events_per_entity)
+        if args.train_only_label:
+            day3 = filter_train_by_label(day3, args.train_only_label)
+            train_prefiltered = True
+        if len(day3) < 2:
+            raise RuntimeError("CICIDS July 3 benign training population is empty or too small")
+        cut = int(len(day3) * .9)
+        df_tr, df_early = day3.iloc[:cut].copy(), day3.iloc[cut:].copy()
+    elif args.split_mode == "time":
         df_tr, df_va, df_te_internal = split_time_within_groups(df, args.train_frac, args.val_frac)
     elif args.split_mode == "entity":
         df_tr, df_va, df_te_internal = split_entity_holdout(df, args.train_frac, args.val_frac, args.seed)
@@ -1029,27 +1033,36 @@ def main():
         df_va, _, _ = split_time_within_groups(df_va0, 0.50, 0.0)
         df_te_internal, _, _ = split_time_within_groups(df_te0, 0.50, 0.0)
 
-    if args.train_only_label:
+    if args.split_mode != "cicids_days":
+        df_tr = filter_entities(df_tr, args.min_events_per_entity)
+    if len(df_tr) == 0:
+        raise RuntimeError("No TRAIN data after temporal splitting/filtering. Lower --min_events_per_entity.")
+
+    if args.train_only_label and not train_prefiltered:
         n_before = len(df_tr)
-        df_tr = filter_train_by_label(df_tr, args.train_only_label)
-        print(f"[train-filter] Label=={args.train_only_label!r}: TRAIN {n_before} -> {len(df_tr)} rows")
-        if len(df_tr) == 0:
-            raise RuntimeError(
-                f"No TRAIN rows remain after --train_only_label={args.train_only_label!r}. "
-                "Check that this Label value exists in the TRAIN time window."
-            )
+        benign_train = filter_train_by_label(df_tr, args.train_only_label)
+        print(f"[train-filter] Label=={args.train_only_label!r}: TRAIN {n_before} -> {len(benign_train)} rows")
+        if len(benign_train) == 0:
+            raise RuntimeError(f"No TRAIN rows remain after --train_only_label={args.train_only_label!r}.")
+        cut = int(len(benign_train) * .9)
+        df_tr, df_early = benign_train.iloc[:cut].copy(), benign_train.iloc[cut:].copy()
+        train_prefiltered = True
+
+    if df_early is None:
+        df_early = df_va.copy()
 
     # 3) Fit tokenization pieces on TRAIN ONLY
     dst_keep = fit_dst_vocab(df_tr, top_n=args.dst_top_n)
     bytes_edges = fit_bytes_bins(df_tr, num_buckets=args.bytes_num_buckets)
 
     # 4) Token strings
-    for d in (df_tr, df_va, df_te_internal):
+    for d in (df_tr, df_early, df_va, df_te_internal):
         d["token_str"] = make_token_strings(d, dst_keep, bytes_edges)
     if df_external_test is not None:
         df_external_test["token_str"] = make_token_strings(df_external_test, dst_keep, bytes_edges)
 
     df_tr = df_tr.sort_values(["entity_id", "timestamp"]).reset_index(drop=True)
+    df_early = df_early.sort_values(["entity_id", "timestamp"]).reset_index(drop=True)
     df_va = df_va.sort_values(["entity_id", "timestamp"]).reset_index(drop=True)
     df_te_internal = df_te_internal.sort_values(["entity_id", "timestamp"]).reset_index(drop=True)
 
@@ -1060,7 +1073,8 @@ def main():
         allowlist_dst = set(vc.head(int(args.allowlist_top_dst)).index.tolist())
 
     # 5) Vocab (fixed grid)
-    vocab, tok_map, _ = build_vocab_from_buckets(dst_keep, bytes_edges)
+    vocab, tok_map, _ = build_vocab_from_buckets(
+        dst_keep, bytes_edges, df_tr["event_type"].astype(str).unique())
     vocab_size = len(vocab) + 2  # PAD=0, UNK=1
 
     # Resume safety check
@@ -1081,10 +1095,11 @@ def main():
 
     # 6) Sequences
     Xtr, ytr, ttr, etr, ltr, rid_tr = make_sequences_from_events(df_tr, tok_map, args.seq_len, args.step)
+    Xearly, yearly, _, _, _, _ = make_sequences_from_events(df_early, tok_map, args.seq_len, args.step)
     Xva, yva, tva, eva, lva, rid_va = make_sequences_from_events(df_va, tok_map, args.seq_len, args.step)
     Xte_i, yte_i, tte_i, ete_i, lte_i, rid_te_i = make_sequences_from_events(df_te_internal, tok_map, args.seq_len, args.step)
 
-    if len(Xtr) == 0 or len(Xva) == 0:
+    if len(Xtr) == 0 or len(Xearly) == 0 or len(Xva) == 0:
         raise RuntimeError("Not enough sequences after TRAIN split. Try lowering --seq_len, --min_events_per_entity, or using --step 1.")
 
     Xte_ext = yte_ext = tte_ext = ete_ext = lte_ext = rid_te_ext = None
@@ -1100,7 +1115,7 @@ def main():
              .map(to_onehot, num_parallel_calls=tf.data.AUTOTUNE)
              .prefetch(tf.data.AUTOTUNE))
 
-    ds_va = (tf.data.Dataset.from_tensor_slices((Xva, yva))
+    ds_va = (tf.data.Dataset.from_tensor_slices((Xearly, yearly))
              .batch(args.batch_size)
              .map(to_onehot, num_parallel_calls=tf.data.AUTOTUNE)
              .prefetch(tf.data.AUTOTUNE))
@@ -1126,7 +1141,7 @@ def main():
         "bytes_num_buckets": int(args.bytes_num_buckets),
         "bytes_edges_log1p": bytes_edges.tolist(),
         "vocab_size": int(vocab_size),
-        "vocab_preview": vocab[:50],
+        "vocabulary": vocab,
         "token_ids": {"PAD": 0, "UNK": 1, "KNOWN_START": 2},
         "allowlist_top_dst": int(args.allowlist_top_dst),
         "allowlist_margin": float(args.allowlist_margin),
@@ -1294,13 +1309,75 @@ def main():
     det_metrics = detection_metrics(ev, score_col=args.alert_score, alert_z_thresh=thresholds[args.alert_score])
     det_metrics.update({"eval_split": eval_split_name, "threshold_source": thresh_source,
                         "target_fpr": args.target_fpr})
+    det_metrics["frozen_operating_point"]["calibration_population"] = {
+        "split": "validation", "benign_windows": int(val_benign.sum()),
+        "target_fpr": float(args.target_fpr), "labels_used_for_threshold": False,
+    }
     metrics_summary["detection"] = det_metrics
-    metrics_summary["detection_by_label"] = detection_metrics_by_label(ev, score_col=args.alert_score)
+    metrics_summary["detection_by_label"] = detection_metrics_by_label(
+        ev, score_col=args.alert_score, threshold=thresholds[args.alert_score])
     metrics_summary["detection_comparison"] = {
         col: {"overall": detection_metrics(ev, score_col=col, alert_z_thresh=thresholds[col]),
-              "by_label": detection_metrics_by_label(ev, score_col=col)}
+              "by_label": detection_metrics_by_label(ev, score_col=col, threshold=thresholds[col])}
         for col in ("combo_score", "entity_nll_z")
     }
+    raw_mask, suppressed_mask = suppression_masks(
+        ev.reset_index(drop=True), args.alert_score, thresholds[args.alert_score],
+        allowlist_dst, args.allowlist_margin)
+    metrics_summary["suppression"] = suppression_metrics(
+        ev["Label"].reset_index(drop=True), raw_mask, suppressed_mask)
+    metrics_summary["suppression"].update({"dedup_seconds": 300, "evaluated_before_export_cap": True})
+    suppression_enabled = metrics_summary["suppression"]["enabled_by_default"]
+    effective_allowlist = allowlist_dst if suppression_enabled else set()
+    effective_dedup_seconds = 300 if suppression_enabled else 0
+    alerts = select_alerts(scores_all, args.alert_score, thresholds[args.alert_score],
+                           args.top_k_alerts, args.max_alerts_per_entity,
+                           effective_allowlist, args.allowlist_margin,
+                           dedup_seconds=effective_dedup_seconds)
+
+    latency_source = Xte_ext if Xte_ext is not None and len(Xte_ext) else Xte_i
+    if args.latency_iterations > 0 and latency_source is not None and len(latency_source):
+        one = latency_source[:1]
+        bench_x = np.repeat(one, args.latency_iterations, axis=0)
+        metrics_summary["inference_benchmark"] = latency_benchmark(
+            lambda: best_model(one, training=False),
+            lambda n: [best_model(bench_x[i:i + 512], training=False)
+                       for i in range(0, n, 512)],
+            iterations=args.latency_iterations, warmup=min(100, args.latency_iterations), batch_size=512)
+        metrics_summary["inference_benchmark"].update({
+            "tensorflow": tf.__version__,
+            "cuda_build": bool(tf.test.is_built_with_cuda()),
+            "devices": [device.name for device in tf.config.list_physical_devices()],
+        })
+
+    save_detector_bundle(
+        args.bundle_dir, args.best_model_path, vocab=vocab, destinations=dst_keep,
+        bytes_edges=bytes_edges, entity_stats=ent_stats_df,
+        global_nll_mean=global_mean, global_nll_std=global_std,
+        window_baselines=win_baselines, seq_len=args.seq_len,
+        score_definition={"variant": args.alert_score, "features": win_baselines["cols"],
+                          "aggregation": "mean_absolute_robust_z",
+                          "allowlist_margin": float(args.allowlist_margin),
+                          "dedup_seconds": effective_dedup_seconds},
+        threshold=thresholds[args.alert_score], allowlist=effective_allowlist,
+        model_version=args.model_version,
+        dataset={"train_csv": args.train_csv, "test_csv": args.test_csv,
+                 "split_mode": args.split_mode, "seed": args.seed})
+    source_paths = [args.train_csv] + ([args.test_csv] if args.test_csv else [])
+    run_manifest = {
+        "dataset_sources": [{"path": p, "sha256": sha256_file(p),
+                             "rows": int(sum(1 for _ in open(p, "rb")) - 1)} for p in source_paths],
+        "splits": split_manifest({"train": df_tr, "early_stop": df_early,
+                                  "development_calibration": df_va,
+                                  "frozen_test": df_external_test if df_external_test is not None else df_te_internal}),
+        "configuration": vars(args), "seed": int(args.seed),
+        "environment": {"python": sys.version, "platform": platform.platform(),
+                        "tensorflow": tf.__version__, "cuda_build": bool(tf.test.is_built_with_cuda()),
+                        "devices": [device.name for device in tf.config.list_physical_devices()]},
+    }
+    metrics_summary["run_manifest"] = run_manifest
+    with open(os.path.join(out_dir, "run_manifest.json"), "w") as f:
+        json.dump(run_manifest, f, indent=2)
     with open(os.path.join(out_dir, "metrics_summary.json"), "w") as f:
         json.dump(metrics_summary, f, indent=2)
 

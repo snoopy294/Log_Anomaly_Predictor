@@ -8,13 +8,13 @@ train:
 train-cicids:
 	python new.py --train_csv data/cicids_clean.csv --train_format clean \
 	  --seq_len 16 --step 1 --min_events_per_entity 10 \
-	  --split_mode time --train_frac 0.7 --val_frac 0.15 \
+	  --split_mode cicids_days \
 	  --dst_top_n 200 --bytes_num_buckets 8 --epochs 20 \
 	  --train_only_label BENIGN --alert_score combo_score --target_fpr 0.01 --plot
 
-# Regenerate README results tables from outputs/metrics_summary.json
+# Regenerate README results tables from the consolidated benchmark summary
 results:
-	python scripts/render_results.py
+	python scripts/render_results.py --summary outputs/benchmark_summary.json
 
 test:
 	python -m pytest tests -q

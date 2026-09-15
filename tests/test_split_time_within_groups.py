@@ -15,23 +15,26 @@ def _df():
     return pd.DataFrame(rows)
 
 
-def test_each_label_gets_proportional_train_val_test_slice():
+def test_split_is_global_and_does_not_balance_labels():
     df_tr, df_va, df_te = split_time_within_groups(_df(), train_frac=0.7, val_frac=0.15)
 
     assert set(df_tr["Label"].unique()) == {"Hulk", "BENIGN"}
-    assert set(df_va["Label"].unique()) == {"Hulk", "BENIGN"}
-    assert set(df_te["Label"].unique()) == {"Hulk", "BENIGN"}
+    assert set(df_va["Label"].unique()) == {"BENIGN"}
+    assert set(df_te["Label"].unique()) == {"BENIGN"}
 
 
-def test_within_label_chronological_order_preserved():
+def test_global_chronological_order_preserved():
     df_tr, df_va, df_te = split_time_within_groups(_df(), train_frac=0.7, val_frac=0.15)
+    assert df_tr["timestamp"].max() <= df_va["timestamp"].min()
+    assert df_va["timestamp"].max() <= df_te["timestamp"].min()
 
-    hulk_tr = df_tr[df_tr["Label"] == "Hulk"]["timestamp"].tolist()
-    hulk_va = df_va[df_va["Label"] == "Hulk"]["timestamp"].tolist()
-    hulk_te = df_te[df_te["Label"] == "Hulk"]["timestamp"].tolist()
-    assert hulk_tr == sorted(hulk_tr)
-    assert max(hulk_tr) <= min(hulk_va + hulk_te, default=max(hulk_tr))
-    assert (not hulk_va or not hulk_te) or max(hulk_va) <= min(hulk_te)
+
+def test_labels_cannot_change_split_membership():
+    df = _df()
+    before = [part.index.tolist() for part in split_time_within_groups(df, .7, .15)]
+    df["Label"] = list(reversed(df["Label"].tolist()))
+    after = [part.index.tolist() for part in split_time_within_groups(df, .7, .15)]
+    assert before == after
 
 
 def test_no_label_column_falls_back_to_entity_only_split():

@@ -33,6 +33,7 @@ from model import (
     compute_attention_rollout,
     get_important_events
 )
+from detector_bundle import DetectorRuntime, load_detector_bundle
 
 app = Flask(__name__)
 CORS(app)  # Enable CORS for React frontend
@@ -43,6 +44,7 @@ MODEL_META = None
 VOCAB = None
 TOKENIZER = None
 ENTITY_STATS = None
+DETECTOR_RUNTIME = None
 EVENT_BUFFER = {}  # Store recent events per entity
 ALERT_QUEUE = queue.Queue()
 
@@ -74,6 +76,7 @@ CONFIG = {
     "out_dir": "outputs",
     "max_buffer_size": 1000,
     "alert_threshold": 3.0,
+    "bundle_path": os.environ.get("DETECTOR_BUNDLE_PATH", "models/detector_bundle"),
 }
 
 
@@ -92,9 +95,20 @@ class TakeLastToken(keras.layers.Layer):
 
 def load_model_and_config():
     """Load the trained model and configuration"""
-    global MODEL, MODEL_META, ENTITY_STATS, VOCAB, TOKENIZER
+    global MODEL, MODEL_META, ENTITY_STATS, VOCAB, TOKENIZER, DETECTOR_RUNTIME
     
     try:
+        bundle_path = CONFIG["bundle_path"]
+        if os.path.exists(os.path.join(bundle_path, "bundle.json")):
+            MODEL_META, MODEL = load_detector_bundle(bundle_path)
+            DETECTOR_RUNTIME = DetectorRuntime(MODEL_META, MODEL)
+            VOCAB = MODEL_META["vocabulary"]
+            TOKENIZER = DETECTOR_RUNTIME.token_map.copy()
+            TOKENIZER.update({"PAD": 0, "UNK": 1})
+            ENTITY_STATS = pd.DataFrame(MODEL_META["entity_nll_stats"])
+            CONFIG["alert_threshold"] = float(MODEL_META["threshold"])
+            print(f"+ Detector bundle {MODEL_META['model_version']} loaded from {bundle_path}")
+            return
         if os.path.exists(CONFIG["model_path"]):
             MODEL = keras.models.load_model(CONFIG["model_path"])
             print(f"+ Model loaded from {CONFIG['model_path']}")
@@ -110,8 +124,9 @@ def load_model_and_config():
         
         # Build vocab and tokenizer from meta
         if MODEL_META:
-            vocab_preview = MODEL_META.get("vocab_preview", [])
-            VOCAB = vocab_preview
+            VOCAB = MODEL_META.get("vocabulary")
+            if not VOCAB:
+                raise RuntimeError("legacy metadata has no full vocabulary; retrain to create a detector bundle")
             # Build reverse tokenizer
             TOKENIZER = {v: i + 2 for i, v in enumerate(VOCAB)}
             TOKENIZER["PAD"] = 0
@@ -120,6 +135,8 @@ def load_model_and_config():
             
     except Exception as e:
         print(f"! Error loading model: {e}")
+        if os.path.exists(os.path.join(CONFIG["bundle_path"], "bundle.json")):
+            raise RuntimeError(f"detector bundle failed validation: {e}") from e
 
 
 # ============================================
@@ -128,6 +145,8 @@ def load_model_and_config():
 
 def tokenize_event(event: Dict) -> int:
     """Convert event to token ID"""
+    if DETECTOR_RUNTIME is not None:
+        return DETECTOR_RUNTIME.token_id(event)
     # Build token string
     event_type = event.get("event_type", "UNK")
     dst = event.get("dst_id", "OTHER")
@@ -223,6 +242,10 @@ def predict_next_event(entity_id: str, return_top_k: int = 5) -> Optional[Dict]:
 
 def compute_anomaly_score(entity_id: str, actual_event: Dict) -> Optional[Dict]:
     """Compute anomaly score for actual next event"""
+    if DETECTOR_RUNTIME is not None:
+        event = dict(actual_event)
+        event["entity_id"] = entity_id
+        return DETECTOR_RUNTIME.score_event(event, update=True)
     if MODEL is None or MODEL_META is None:
         return None
     
@@ -290,6 +313,9 @@ def health_check():
     return jsonify({
         "status": "healthy",
         "model_loaded": MODEL is not None,
+        "model_version": MODEL_META.get("model_version") if MODEL_META else None,
+        "warm_up_state": ("warm" if DETECTOR_RUNTIME and DETECTOR_RUNTIME.warmed_up else "cold"),
+        "batch_one_latency_ms": DETECTOR_RUNTIME.last_latency_ms if DETECTOR_RUNTIME else None,
         "timestamp": datetime.now().isoformat()
     })
 
@@ -375,6 +401,9 @@ def get_stats():
         "engineName": engine_name,
         "seqLen": seq_len,
         "alertThreshold": CONFIG["alert_threshold"],
+        "modelVersion": MODEL_META.get("model_version") if MODEL_META else None,
+        "warmUpState": "warm" if DETECTOR_RUNTIME and DETECTOR_RUNTIME.warmed_up else "cold",
+        "batchOneLatencyMs": DETECTOR_RUNTIME.last_latency_ms if DETECTOR_RUNTIME else None,
         "maxBufferSize": CONFIG["max_buffer_size"],
         "modelLoaded": MODEL is not None,
         "timestamp": datetime.now().isoformat()
@@ -391,11 +420,9 @@ def ingest_event():
         if not entity_id:
             return jsonify({"error": "entity_id is required"}), 400
         
-        # Add to buffer
-        add_event_to_buffer(entity_id, event)
-        
-        # Compute anomaly score
+        # The shared runtime scores against prior context, then appends the event.
         score = compute_anomaly_score(entity_id, event)
+        add_event_to_buffer(entity_id, event)
         
         return jsonify({
             "success": True,
@@ -543,6 +570,12 @@ def detect_csv_format(csv_path):
 def train_model():
     """Trigger model training in background thread"""
     global TRAINING_STATE
+
+    if DETECTOR_RUNTIME is not None:
+        return jsonify({
+            "success": False,
+            "message": "Versioned detectors must be trained and calibrated by new.py, then loaded as one bundle."
+        }), 409
     
     if TRAINING_STATE["is_training"]:
         return jsonify({"success": False, "message": "Training already in progress"}), 409
@@ -606,7 +639,8 @@ def train_model():
                 df_va = df_va.sort_values(["entity_id", "timestamp"]).reset_index(drop=True)
                 
                 # Build vocab
-                vocab, tok_map, _ = build_vocab_from_buckets(dst_keep, bytes_edges)
+                vocab, tok_map, _ = build_vocab_from_buckets(
+                    dst_keep, bytes_edges, df_tr["event_type"].astype(str).unique())
                 vocab_size = len(vocab) + 2  # PAD=0, UNK=1
                 seq_len = 10
                 

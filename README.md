@@ -1,107 +1,96 @@
-# Log_Anomaly_Predictor
+# Log Anomaly Predictor
 
-Unsupervised intrusion detection over network-flow logs. A Transformer next-event
-language model learns what each host's normal event sequences look like, trained on
-benign traffic only. Each sliding window of events is then scored against that host's
-own baseline, which is also fit on benign training windows. The score combines two things:
+An unsupervised network-flow detector built around a Transformer next-event model and
+benign-trained behavioral baselines. Offline evaluation and the Flask API consume the
+same versioned detector bundle: vocabulary, destination buckets, byte bins, model,
+entity/global NLL statistics, behavioral baselines, score definition, threshold, and
+suppression policy are all hashed and loaded together.
 
-- how *surprising* the next event is to the model (NLL)
-- how *unusual* the window's shape is: token/destination diversity, repetition, byte statistics
+## Benchmark protocol
 
-Surprise alone misses repetitive attacks such as port scans, slow DoS and web brute
-force, because a flood of identical events is highly *predictable*. The window-shape
-statistics catch exactly those.
+- **CICIDS2017 development:** train and early-stop on benign July 3 traffic; calibrate
+  on benign July 4 traffic; use July 4 attack labels only to select among the fixed
+  candidate set. After selection, freeze preprocessing, score, threshold, and
+  suppression and evaluate July 5–7 once.
+- **UNSW-NB15 retrained:** use the full time-bearing release and a global chronological
+  60/20/20 split, with benign-only fitting and benign calibration.
+- **UNSW-NB15 zero-shot:** apply the frozen CICIDS bundle and threshold without any
+  UNSW tuning. This is a stress test, not a selection input.
+- Candidate selection maximizes macro attack-family recall at validation FPR ≤ 1%,
+  breaking ties by precision and then p95 latency. Seeds are fixed at 42, 43, and 44.
 
-```
-flow logs ─► tokenize (event | dst | bytes bucket) ─► per-entity sliding windows
-                                                          │
-                     ┌────────────────────────────────────┴───────────────┐
-                     ▼                                                    ▼
-        Transformer next-event LM ─► NLL                       window statistics
-                     └──────────────► robust z vs. per-entity TRAIN baseline ◄┘
-                                               │
-                              combo_score = mean |z| ─► threshold @ 1% FPR on benign val
-                                               │
-                                     alerts CSV ─► Flask API ─► dashboard
-```
+Both datasets are testbed traffic and should not be read as production performance.
+Large source datasets are ignored by Git; each run manifest records source SHA-256,
+row and label counts, exact temporal boundaries, configuration, seed, and environment.
 
-## Results — CICIDS2017
+## Results
 
 <!-- RESULTS:START -->
-Evaluated on the held-out **internal_test** split: 363,542 windows, 83,475 of them attacks. Operating threshold: quantile of 278,371 benign val windows @ FPR=0.01; test labels are never used to pick it.
-
-| Metric | combo_score (alerting) | entity_nll_z (LM surprise only) |
-|---|---:|---:|
-| ROC-AUC | 0.9963 | 0.4950 |
-| PR-AUC | 0.9902 | 0.4142 |
-| Detection rate @ 1% FPR | 99.2% | 0.0% |
-| Detection rate @ 0.1% FPR | 70.9% | 0.0% |
-| Precision @ operating threshold | 0.983 | 0.065 |
-| Recall @ operating threshold | 0.986 | 0.003 |
-| F1 @ operating threshold | 0.985 | 0.006 |
-| Operating threshold | 3.366 | 3.533 |
-
-Per-attack ROC-AUC (each attack type vs. all benign test windows):
-
-| Attack | Test windows | combo_score | entity_nll_z |
-|---|---:|---:|---:|
-| DoS Hulk | 34,519 | 0.999 | 0.438 |
-| PortScan | 23,822 | 0.998 | 0.154 |
-| DDoS | 19,204 | 0.998 | 0.977 |
-| DoS GoldenEye | 1,545 | 0.999 | 0.838 |
-| FTP-Patator | 1,191 | 0.997 | 0.805 |
-| DoS slowloris | 870 | 0.997 | 0.466 |
-| SSH-Patator | 870 | 0.996 | 0.617 |
-| DoS Slowhttptest | 826 | 0.999 | 0.456 |
-| Bot | 298 | 0.349 | 0.510 |
-| Web Attack – Brute Force | 227 | 0.999 | 0.140 |
-| Web Attack – XSS | 99 | 1.000 | 0.106 |
-| Web Attack – Sql Injection | 4 | 0.998 | 0.627 |
-
-_Auxiliary (not a detection metric): next-event LM accuracy on internal_test = 0.390, top-5 = 0.762._
+_No leak-safe benchmark has been published yet._
 <!-- RESULTS:END -->
 
-The numbers above are generated, never hand-edited. `scripts/render_results.py` writes
-them from `outputs/metrics_summary.json`.
+The previous label-balanced split results were removed because labels influenced row
+assignment. `scripts/render_results.py` is the only supported way to populate this
+section, and it reads only `outputs/benchmark_summary.json`. Results should be
+published even when they are lower than earlier experiments.
 
-### Limitations
+## Reproduce
 
-- **Bot is not detected.** Its traffic blends into the host's normal pattern instead of
-  arriving as a burst, so neither score separates it from benign.
-- **Some attack classes have very few test windows** (SQL injection especially), so their
-  per-class AUCs are noisy.
-- **The window features were designed after looking at held-out results.** An earlier
-  analysis showed where NLL alone failed. The operating threshold never sees test
-  labels, but a second labeled dataset would give a cleaner estimate of generalization.
-- **CICIDS attacks are concentrated bursts against a few hosts.** That favors
-  window-shape statistics, and results on low-and-slow real-world traffic may be lower.
+Install dependencies and run the deterministic fixture suite:
+
+```bash
+python -m pip install -r requirements.txt
+python -m pytest tests -q
+```
+
+Run the CICIDS protocol for each reference seed (large dataset and GPU required):
+
+```bash
+python new.py --train_csv data/cicids_clean.csv --train_format clean \
+  --split_mode cicids_days --train_only_label BENIGN --seed 42 \
+  --seq_len 16 --step 1 --target_fpr 0.01 \
+  --out_dir outputs/runs/cicids2017/seed-42 \
+  --bundle_dir models/detector_bundle
+```
+
+For retrained UNSW-NB15, use the full release containing `Stime`, `srcip`, and `dstip`:
+
+```bash
+python new.py --train_csv data/unsw_nb15_full.csv --train_format unsw \
+  --split_mode time --train_frac 0.60 --val_frac 0.20 \
+  --train_only_label BENIGN --seed 42 --target_fpr 0.01 \
+  --out_dir outputs/runs/unsw_nb15_retrained/seed-42
+```
+
+Repeat both retrained commands with seeds 43 and 44. Keep the CICIDS bundle unchanged
+for the zero-shot UNSW run:
+
+```bash
+python scripts/score_zero_shot_unsw.py --csv data/unsw_nb15_full.csv \
+  --bundle models/detector_bundle \
+  --out outputs/runs/unsw_nb15_zero_shot/cicids-frozen
+```
+
+Generate the README table only after consolidating complete
+run outputs:
+
+```bash
+python scripts/render_results.py --summary outputs/benchmark_summary.json
+```
 
 ## Repository layout
 
 | Path | Role |
 |---|---|
-| `new.py` | Main pipeline: tokenize, split, train, score, calibrate, write alerts and metrics |
-| `backend.py` | Flask API that serves the dashboard (`frontend.html`) |
-| `model.py` | Explainability helpers used by `/api/explain` |
-| `cicids_into_clean.R`, `cicids_to_clean.py` | CICIDS2017 → clean event schema converters (R, plus a Python fallback) |
-| `scripts/` | Utilities: `render_results.py` (README tables), `generate_data.py` (synthetic sample) |
-| `tests/` | pytest suite |
-| `outputs/` | Committed metrics and plots from the reference run |
-| `experiments/` | Side experiments, not part of the pipeline |
+| `datasets.py` | UNSW adapter, CICIDS day contract, global label-blind splits, hashes |
+| `benchmark.py` | fixed candidate screening, multi-timescale features, seed aggregation, manifests |
+| `benchmark_metrics.py` | frozen operating point, per-family, suppression, and latency metrics |
+| `detector_bundle.py` | hashed bundle serialization and shared stateful scoring runtime |
+| `new.py` | model training, calibration, evaluation, and bundle export |
+| `backend.py` | compatible Flask routes backed by the shared detector runtime |
+| `tests/` | deterministic split, adapter, metric, scoring, and parity fixtures |
 
-Common tasks: `make train` (small synthetic sample), `make train-cicids`, `make results`,
-`make test`, `make serve`.
-
-## Reproduce
-
-Training runs on a GPU. Data splits are chronological within each (entity, label)
-group. The model is trained on BENIGN windows only.
-
-```bash
-python new.py --train_csv data/cicids_clean.csv --train_format clean \
-  --seq_len 16 --step 1 --min_events_per_entity 10 \
-  --split_mode time --train_frac 0.7 --val_frac 0.15 \
-  --dst_top_n 200 --bytes_num_buckets 8 --epochs 20 \
-  --train_only_label BENIGN --alert_score combo_score --target_fpr 0.01 --plot
-python scripts/render_results.py
-```
+The API continues to support the existing routes. Anomaly responses additionally expose
+`score`, `threshold`, `top_contributing_feature`, `model_version`, `warm_up_state`, and
+`batch_one_latency_ms`. A present but corrupt or dimensionally incompatible bundle
+causes startup to fail clearly instead of silently degrading most events to `UNK`.
