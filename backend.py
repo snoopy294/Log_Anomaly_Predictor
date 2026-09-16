@@ -30,7 +30,6 @@ from new import (
 )
 from model import (
     build_improved_transformer_model,
-    compute_attention_rollout,
     get_important_events
 )
 from detector_bundle import DetectorRuntime, load_detector_bundle
