@@ -1,7 +1,6 @@
 import numpy as np
 import pandas as pd
 import pytest
-import tempfile
 from pathlib import Path
 
 from detector_bundle import DetectorRuntime, load_detector_bundle, save_detector_bundle
@@ -113,25 +112,23 @@ def test_score_events_batched_matches_score_events_one_at_a_time():
                                   actual[compare_cols].reset_index(drop=True))
 
 
-def test_bundle_round_trip_and_payload_hash_validation():
-    with tempfile.TemporaryDirectory(dir="tmp") as directory:
-        tmp_path = Path(directory)
-        model = tmp_path / "source.keras"
-        model.write_bytes(b"model fixture")
-        features = _bundle()["window_baselines"]
-        baselines = {"cols": features["features"],
-                     "g_med": pd.Series(features["global_median"]),
-                     "g_scale": pd.Series(features["global_scale"]),
-                     "e_med": pd.DataFrame(columns=features["features"]),
-                     "e_scale": pd.DataFrame(columns=features["features"])}
-        save_detector_bundle(tmp_path / "bundle", model, vocab=["x"], destinations=set(),
-                             bytes_edges=[0, 1], entity_stats=pd.DataFrame(
-                                 columns=["entity_id", "mean_nll", "std_nll"]),
-                             global_nll_mean=0, global_nll_std=1, window_baselines=baselines,
-                             seq_len=2, score_definition={"variant": "combo_score"}, threshold=1)
-        data, loaded_model = load_detector_bundle(tmp_path / "bundle", load_model=False)
-        assert data["vocabulary"] == ["x"] and loaded_model is None
-        manifest = tmp_path / "bundle" / "bundle.json"
-        manifest.write_text(manifest.read_text().replace('"threshold": 1.0', '"threshold": 2.0'))
-        with pytest.raises(RuntimeError, match="payload hash mismatch"):
-            load_detector_bundle(tmp_path / "bundle", load_model=False)
+def test_bundle_round_trip_and_payload_hash_validation(tmp_path):
+    model = tmp_path / "source.keras"
+    model.write_bytes(b"model fixture")
+    features = _bundle()["window_baselines"]
+    baselines = {"cols": features["features"],
+                 "g_med": pd.Series(features["global_median"]),
+                 "g_scale": pd.Series(features["global_scale"]),
+                 "e_med": pd.DataFrame(columns=features["features"]),
+                 "e_scale": pd.DataFrame(columns=features["features"])}
+    save_detector_bundle(tmp_path / "bundle", model, vocab=["x"], destinations=set(),
+                         bytes_edges=[0, 1], entity_stats=pd.DataFrame(
+                             columns=["entity_id", "mean_nll", "std_nll"]),
+                         global_nll_mean=0, global_nll_std=1, window_baselines=baselines,
+                         seq_len=2, score_definition={"variant": "combo_score"}, threshold=1)
+    data, loaded_model = load_detector_bundle(tmp_path / "bundle", load_model=False)
+    assert data["vocabulary"] == ["x"] and loaded_model is None
+    manifest = tmp_path / "bundle" / "bundle.json"
+    manifest.write_text(manifest.read_text().replace('"threshold": 1.0', '"threshold": 2.0'))
+    with pytest.raises(RuntimeError, match="payload hash mismatch"):
+        load_detector_bundle(tmp_path / "bundle", load_model=False)
