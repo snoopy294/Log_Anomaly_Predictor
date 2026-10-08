@@ -45,3 +45,9 @@ def test_train_status_route_unaffected():
     body = response.get_json()
     assert set(body.keys()) == {"is_training", "progress", "accuracy",
                                 "top5_accuracy", "last_trained", "error"}
+
+
+def test_upload_csv_route_removed():
+    client = backend.app.test_client()
+    response = client.post("/api/upload_csv")
+    assert response.status_code == 404

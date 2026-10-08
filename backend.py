@@ -503,41 +503,6 @@ def get_timeline():
     return jsonify(timeline)
 
 
-def run_r_cicids_adapter(in_csv, out_csv):
-    """Run cicids_into_clean.R to convert CICIDS format to clean format"""
-    import subprocess
-    r_script = os.path.join(os.path.dirname(__file__), "cicids_into_clean.R")
-    if not os.path.exists(r_script):
-        raise FileNotFoundError(f"R adapter script not found: {r_script}")
-    
-    # Try Rscript from PATH
-    rscript_bin = "Rscript"
-    cmd = [rscript_bin, r_script, "--in_csv", in_csv, "--out_csv", out_csv, "--verbose"]
-    
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-    if result.returncode != 0:
-        raise RuntimeError(f"R script failed (exit {result.returncode}):\n{result.stderr}")
-    
-    if not os.path.exists(out_csv):
-        raise RuntimeError(f"R script ran but output file not created: {out_csv}")
-    
-    print(f"R adapter output: {result.stdout}")
-    return out_csv
-
-
-def detect_csv_format(csv_path):
-    """Detect if a CSV is CICIDS raw format or clean format"""
-    df_peek = pd.read_csv(csv_path, nrows=3)
-    # Strip whitespace from column names (CICIDS files often have leading spaces)
-    cols = set(c.strip() for c in df_peek.columns)
-    
-    if {"timestamp", "entity_id", "event_type"}.issubset(cols):
-        return "clean"
-    if {"Timestamp", "Source IP", "Destination IP", "Destination Port", "Protocol"}.issubset(cols):
-        return "cicids"
-    return "unknown"
-
-
 @app.route('/api/train', methods=['POST'])
 def train_model():
     """Versioned detectors are trained and calibrated exclusively by new.py,
@@ -603,62 +568,6 @@ def train_status():
         "last_trained": TRAINING_STATE["last_trained"],
         "error": TRAINING_STATE["error"],
     })
-
-
-@app.route('/api/upload_csv', methods=['POST'])
-def upload_csv():
-    """Upload a CSV file for training. Accepts CICIDS or clean format.
-    CICIDS files are auto-converted via cicids_into_clean.R."""
-    if 'file' not in request.files:
-        return jsonify({"success": False, "error": "No file provided"}), 400
-    
-    file = request.files['file']
-    if file.filename == '':
-        return jsonify({"success": False, "error": "No file selected"}), 400
-    
-    try:
-        data_dir = os.path.join(os.path.dirname(__file__), "data")
-        os.makedirs(data_dir, exist_ok=True)
-        
-        # Save the uploaded file
-        upload_path = os.path.join(data_dir, "uploaded_raw.csv")
-        file.save(upload_path)
-        
-        # Detect format
-        fmt = detect_csv_format(upload_path)
-        
-        if fmt == "cicids":
-            # Run R adapter to convert to clean format
-            clean_path = os.path.join(data_dir, "train_data.csv")
-            run_r_cicids_adapter(upload_path, clean_path)
-            row_count = sum(1 for _ in open(clean_path)) - 1
-            
-            return jsonify({
-                "success": True,
-                "message": f"CICIDS dataset preprocessed with cicids_into_clean.R and saved ({row_count} rows). Ready to train!",
-                "format": "cicids",
-                "rows": row_count,
-            })
-        elif fmt == "clean":
-            import shutil
-            train_path = os.path.join(data_dir, "train_data.csv")
-            shutil.copy2(upload_path, train_path)
-            row_count = sum(1 for _ in open(train_path)) - 1
-            
-            return jsonify({
-                "success": True,
-                "message": f"Clean-format CSV saved ({row_count} rows). Ready to train!",
-                "format": "clean",
-                "rows": row_count,
-            })
-        else:
-            return jsonify({
-                "success": False,
-                "error": "Unrecognized CSV format. Only CICIDS datasets (Timestamp, Source IP, Destination IP, Destination Port, Protocol) or clean format (timestamp, entity_id, event_type) are supported."
-            }), 400
-            
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
 
 
 @app.route('/api/model/info', methods=['GET'])
