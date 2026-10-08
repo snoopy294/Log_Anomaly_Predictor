@@ -78,7 +78,8 @@ def main():
                        source_files=[args.csv],
                        splits={"train_benign": train_benign, "development": development},
                        config={"target_fpr": args.target_fpr, "bundle": args.bundle}, seed=args.seed)
-    (out / "candidate_selection.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
+    (out / "candidate_selection.json").write_text(json.dumps(result, indent=2, allow_nan=False),
+                                                  encoding="utf-8")
 
 
 if __name__ == "__main__":

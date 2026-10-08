@@ -1,3 +1,5 @@
+import json
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -90,3 +92,26 @@ def test_multiscale_features_are_causal_and_complete():
             "w2_bytes_mean", "w2_bytes_std", "w2_fanout"} == set(features.columns)
     assert features.loc[0, "w2_fanout"] == 1
     assert features.loc[3, "w2_fanout"] == 2
+
+
+def test_unmeasured_latency_is_null_and_json_strict():
+    frame = pd.DataFrame({"Label": ["BENIGN"] * 100 + ["A"] * 10,
+                          "s": list(range(100)) + [200] * 10})
+    out = screen_candidates(frame, ["s"], target_fpr=.01)
+    assert out["winner"]["p95_latency_ms"] is None
+    json.dumps(out, allow_nan=False)
+
+
+def test_measured_latency_beats_unmeasured_on_tie():
+    frame = pd.DataFrame({"Label": ["BENIGN"] * 100 + ["A"] * 10,
+                          "a": list(range(100)) + [200] * 10,
+                          "b": list(range(100)) + [200] * 10})
+    out = screen_candidates(frame, ["a", "b"], target_fpr=.01, latency_p95_ms={"b": 5.0})
+    assert out["winner"]["variant"] == "b"
+    assert out["winner"]["p95_latency_ms"] == 5.0
+
+
+def test_improvement_gate_treats_unmeasured_latency_as_unbounded():
+    current = {"macro_attack_family_recall": .5, "fpr": .01, "p95_latency_ms": None}
+    assert improvement_gate(current, {"macro_attack_family_recall": .6, "fpr": .01,
+                                      "p95_latency_ms": None})

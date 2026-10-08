@@ -140,6 +140,11 @@ def isolation_scores(model: IsolationForest, features: pd.DataFrame) -> np.ndarr
     return -model.score_samples(features.to_numpy(float))
 
 
+def _latency_sort_key(value: float | None) -> float:
+    """Unmeasured latency (None) sorts after every measured value."""
+    return np.inf if value is None else float(value)
+
+
 def screen_candidates(validation: pd.DataFrame, score_columns: list[str], target_fpr=.01,
                       latency_p95_ms: dict[str, float] | None = None) -> dict:
     """Select solely on development labels; thresholds use benign rows only."""
@@ -161,12 +166,13 @@ def screen_candidates(validation: pd.DataFrame, score_columns: list[str], target
         macro = float(np.mean([v["recall"] for v in attacks.values()])) if attacks else 0.0
         rows.append({"variant": name, "threshold": threshold, "macro_attack_family_recall": macro,
                      "precision": overall["precision"], "fpr": overall["observed_test_fpr"],
-                     "p95_latency_ms": float(latency_p95_ms.get(name, np.inf))})
+                     "p95_latency_ms": (float(latency_p95_ms[name])
+                                        if name in latency_p95_ms else None)})
     eligible = [r for r in rows if r["fpr"] <= target_fpr + fpr_tolerance + 1e-12]
     if not eligible:
         raise RuntimeError("no candidate met the validation FPR constraint")
-    winner = sorted(eligible, key=lambda r: (-r["macro_attack_family_recall"],
-                                              -r["precision"], r["p95_latency_ms"], r["variant"]))[0]
+    winner = sorted(eligible, key=lambda r: (-r["macro_attack_family_recall"], -r["precision"],
+                                              _latency_sort_key(r["p95_latency_ms"]), r["variant"]))[0]
     return {"selection_population": "development only", "target_fpr": target_fpr,
             "candidates": rows, "winner": winner}
 
@@ -174,7 +180,8 @@ def screen_candidates(validation: pd.DataFrame, score_columns: list[str], target
 def improvement_gate(current: dict, candidate: dict) -> bool:
     return bool(candidate["macro_attack_family_recall"] - current["macro_attack_family_recall"] >= .02
                 and candidate["fpr"] - current["fpr"] <= .01
-                and candidate["p95_latency_ms"] <= current["p95_latency_ms"] * 1.10)
+                and _latency_sort_key(candidate["p95_latency_ms"])
+                <= _latency_sort_key(current["p95_latency_ms"]) * 1.10)
 
 
 def aggregate_seed_metrics(runs: list[dict]) -> dict:
