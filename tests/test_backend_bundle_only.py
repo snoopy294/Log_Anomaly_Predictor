@@ -51,3 +51,13 @@ def test_upload_csv_route_removed():
     client = backend.app.test_client()
     response = client.post("/api/upload_csv")
     assert response.status_code == 404
+
+
+def test_compute_anomaly_score_returns_none_without_detector_runtime(monkeypatch):
+    monkeypatch.setattr(backend, "DETECTOR_RUNTIME", None)
+    monkeypatch.setattr(backend, "MODEL", object())  # legacy branch would have used this
+    monkeypatch.setattr(backend, "MODEL_META", {"seq_len": 4})
+    # A full buffer so a legacy fallback would get past its length check.
+    monkeypatch.setitem(backend.EVENT_BUFFER, "some_entity", [{"token_id": 2}] * 4)
+    result = backend.compute_anomaly_score("some_entity", {"event_type": "tcp:80"})
+    assert result is None

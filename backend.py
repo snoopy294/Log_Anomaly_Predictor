@@ -213,66 +213,13 @@ def predict_next_event(entity_id: str, return_top_k: int = 5) -> Optional[Dict]:
 
 
 def compute_anomaly_score(entity_id: str, actual_event: Dict) -> Optional[Dict]:
-    """Compute anomaly score for actual next event"""
-    if DETECTOR_RUNTIME is not None:
-        event = dict(actual_event)
-        event["entity_id"] = entity_id
-        return DETECTOR_RUNTIME.score_event(event, update=True)
-    if MODEL is None or MODEL_META is None:
+    """Compute anomaly score for actual next event via the shared DetectorRuntime.
+    Returns None if no detector bundle is loaded — there is no legacy fallback."""
+    if DETECTOR_RUNTIME is None:
         return None
-    
-    buffer = get_entity_buffer(entity_id)
-    seq_len = MODEL_META.get("seq_len", 64)
-    
-    if len(buffer) < seq_len:
-        return None
-    
-    # Get last seq_len events
-    recent = buffer[-seq_len:]
-    X = np.array([e["token_id"] for e in recent], dtype=np.int32).reshape(1, -1)
-    
-    # Predict with latency tracking
-    t0 = time.perf_counter()
-    probs = MODEL.predict(X, verbose=0)[0]
-    latency_ms = (time.perf_counter() - t0) * 1000
-    PERFORMANCE_METRICS["inference_latency_samples"].append(latency_ms)
-    if len(PERFORMANCE_METRICS["inference_latency_samples"]) > 100:
-        PERFORMANCE_METRICS["inference_latency_samples"] = PERFORMANCE_METRICS["inference_latency_samples"][-100:]
-    PERFORMANCE_METRICS["total_events_scored"] += 1
-    
-    # Get actual token ID
-    actual_token = tokenize_event(actual_event)
-    actual_prob = probs[actual_token] if actual_token < len(probs) else 1e-9
-    
-    # Compute NLL
-    nll = -np.log(np.clip(actual_prob, 1e-9, 1.0))
-    
-    # Compute z-score if we have entity stats
-    z_score = None
-    if ENTITY_STATS is not None:
-        entity_stat = ENTITY_STATS[ENTITY_STATS["entity_id"] == entity_id]
-        if len(entity_stat) > 0:
-            mean_nll = float(entity_stat["mean_nll"].iloc[0])
-            std_nll = float(entity_stat["std_nll"].iloc[0])
-            z_score = (nll - mean_nll) / (std_nll + 1e-6)
-    
-    is_anomaly = (z_score and z_score > CONFIG["alert_threshold"]) or nll > 5.0
-    
-    result = {
-        "entity_id": entity_id,
-        "timestamp": datetime.now().isoformat(),
-        "nll": float(nll),
-        "z_score": float(z_score) if z_score is not None else None,
-        "actual_probability": float(actual_prob),
-        "is_anomaly": bool(is_anomaly),
-    }
-    
-    # Add to alert queue if anomaly
-    if is_anomaly:
-        ALERT_QUEUE.put(result)
-        PERFORMANCE_METRICS["anomalies_flagged"] += 1
-    
-    return result
+    event = dict(actual_event)
+    event["entity_id"] = entity_id
+    return DETECTOR_RUNTIME.score_event(event, update=True)
 
 
 # ============================================
