@@ -105,7 +105,12 @@ def parse_timestamp_utc(s: pd.Series) -> pd.Series:
     # format="mixed": this file mixes "DD/MM/YYYY HH:MM:SS" and unpadded
     # "D/M/YYYY H:MM" (no seconds) rows; a single inferred format silently
     # NaT's out whichever variant doesn't match, so let pandas parse row-wise.
-    return pd.to_datetime(s, dayfirst=True, errors="coerce", utc=True, format="mixed")
+    ts = pd.to_datetime(s, dayfirst=True, errors="coerce", utc=True, format="mixed")
+    # CICIDS2017 writes a 12-hour clock with no AM/PM marker, and the capture
+    # runs roughly 08:00-17:00, so 1:00-7:59 are afternoon times. Left as-is,
+    # afternoon flows sort before the morning and break each day's causal order.
+    afternoon = ts.dt.hour.between(1, 7)
+    return ts.where(~afternoon, ts + pd.Timedelta(hours=12))
 
 
 def compute_bytes(df: pd.DataFrame) -> pd.Series:
