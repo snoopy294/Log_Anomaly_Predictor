@@ -6,6 +6,18 @@ same versioned detector bundle: vocabulary, destination buckets, byte bins, mode
 entity/global NLL statistics, behavioral baselines, score definition, threshold, and
 suppression policy are all hashed and loaded together.
 
+```mermaid
+flowchart TD
+  raw["Raw flows<br/>CICIDS2017 / UNSW-NB15"] --> clean["cicids_to_clean.py · datasets.py<br/>timestamp, entity, event type, peer, bytes"]
+  clean --> train["new.py<br/>Transformer next-event model<br/>trained on benign July 3"]
+  train --> base["Per-entity NLL stats +<br/>behavioral window baselines"]
+  base --> score["combo_score<br/>mean robust z of 7 window features + NLL"]
+  score --> cal["Threshold at 1% FPR<br/>benign July 4 only"]
+  cal --> bundle[("Hashed detector bundle")]
+  bundle --> offline["Offline evaluation<br/>July 5–7, ablation, zero-shot"]
+  bundle --> api["backend.py Flask API<br/>+ frontend.html dashboard"]
+```
+
 ## Benchmark protocol
 
 - **CICIDS2017 development:** train and early-stop on benign July 3 traffic; calibrate
