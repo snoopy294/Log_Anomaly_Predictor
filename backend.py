@@ -15,7 +15,6 @@ from flask_cors import CORS
 import tensorflow as tf
 from tensorflow import keras
 from datetime import datetime, timedelta
-import threading
 import queue
 from typing import Dict, List, Optional
 import pickle
@@ -30,7 +29,6 @@ from new import (
 )
 from model import (
     build_improved_transformer_model,
-    compute_attention_rollout,
     get_important_events
 )
 from detector_bundle import DetectorRuntime, load_detector_bundle
@@ -70,9 +68,6 @@ PERFORMANCE_METRICS = {
 
 # Configuration
 CONFIG = {
-    "model_path": "models/log_transformer.keras",
-    "meta_path": "models/log_transformer_meta.json",
-    "stats_path": "outputs/entity_stats.csv",
     "out_dir": "outputs",
     "max_buffer_size": 1000,
     "alert_threshold": 3.0,
@@ -94,49 +89,26 @@ class TakeLastToken(keras.layers.Layer):
 # ============================================
 
 def load_model_and_config():
-    """Load the trained model and configuration"""
+    """Load the versioned detector bundle. Detectors are trained and calibrated
+    exclusively by new.py; there is no legacy raw-.keras loading path."""
     global MODEL, MODEL_META, ENTITY_STATS, VOCAB, TOKENIZER, DETECTOR_RUNTIME
-    
+
+    bundle_path = CONFIG["bundle_path"]
+    if not os.path.exists(os.path.join(bundle_path, "bundle.json")):
+        print(f"! No detector bundle found at {bundle_path}. Train one with new.py first.")
+        return
+
     try:
-        bundle_path = CONFIG["bundle_path"]
-        if os.path.exists(os.path.join(bundle_path, "bundle.json")):
-            MODEL_META, MODEL = load_detector_bundle(bundle_path)
-            DETECTOR_RUNTIME = DetectorRuntime(MODEL_META, MODEL)
-            VOCAB = MODEL_META["vocabulary"]
-            TOKENIZER = DETECTOR_RUNTIME.token_map.copy()
-            TOKENIZER.update({"PAD": 0, "UNK": 1})
-            ENTITY_STATS = pd.DataFrame(MODEL_META["entity_nll_stats"])
-            CONFIG["alert_threshold"] = float(MODEL_META["threshold"])
-            print(f"+ Detector bundle {MODEL_META['model_version']} loaded from {bundle_path}")
-            return
-        if os.path.exists(CONFIG["model_path"]):
-            MODEL = keras.models.load_model(CONFIG["model_path"])
-            print(f"+ Model loaded from {CONFIG['model_path']}")
-        
-        if os.path.exists(CONFIG["meta_path"]):
-            with open(CONFIG["meta_path"], 'r') as f:
-                MODEL_META = json.load(f)
-            print(f"+ Metadata loaded")
-        
-        if os.path.exists(CONFIG["stats_path"]):
-            ENTITY_STATS = pd.read_csv(CONFIG["stats_path"])
-            print(f"+ Entity stats loaded")
-        
-        # Build vocab and tokenizer from meta
-        if MODEL_META:
-            VOCAB = MODEL_META.get("vocabulary")
-            if not VOCAB:
-                raise RuntimeError("legacy metadata has no full vocabulary; retrain to create a detector bundle")
-            # Build reverse tokenizer
-            TOKENIZER = {v: i + 2 for i, v in enumerate(VOCAB)}
-            TOKENIZER["PAD"] = 0
-            TOKENIZER["UNK"] = 1
-            print(f"+ Tokenizer initialized with {len(TOKENIZER)} tokens")
-            
+        MODEL_META, MODEL = load_detector_bundle(bundle_path)
+        DETECTOR_RUNTIME = DetectorRuntime(MODEL_META, MODEL)
+        VOCAB = MODEL_META["vocabulary"]
+        TOKENIZER = DETECTOR_RUNTIME.token_map.copy()
+        TOKENIZER.update({"PAD": 0, "UNK": 1})
+        ENTITY_STATS = pd.DataFrame(MODEL_META["entity_nll_stats"])
+        CONFIG["alert_threshold"] = float(MODEL_META["threshold"])
+        print(f"+ Detector bundle {MODEL_META['model_version']} loaded from {bundle_path}")
     except Exception as e:
-        print(f"! Error loading model: {e}")
-        if os.path.exists(os.path.join(CONFIG["bundle_path"], "bundle.json")):
-            raise RuntimeError(f"detector bundle failed validation: {e}") from e
+        raise RuntimeError(f"detector bundle failed validation: {e}") from e
 
 
 # ============================================
@@ -144,17 +116,11 @@ def load_model_and_config():
 # ============================================
 
 def tokenize_event(event: Dict) -> int:
-    """Convert event to token ID"""
-    if DETECTOR_RUNTIME is not None:
-        return DETECTOR_RUNTIME.token_id(event)
-    # Build token string
-    event_type = event.get("event_type", "UNK")
-    dst = event.get("dst_id", "OTHER")
-    bytes_bucket = event.get("bytes_bucket", 0)
-    
-    token_str = f"{event_type}|DST={dst}|BYTES_Q{bytes_bucket}"
-    
-    return TOKENIZER.get(token_str, 1)  # 1 = UNK
+    """Convert event to token ID via the shared DetectorRuntime. Returns UNK (1)
+    if no detector bundle is loaded."""
+    if DETECTOR_RUNTIME is None:
+        return 1
+    return DETECTOR_RUNTIME.token_id(event)
 
 
 def get_entity_buffer(entity_id: str) -> List[Dict]:
@@ -241,66 +207,13 @@ def predict_next_event(entity_id: str, return_top_k: int = 5) -> Optional[Dict]:
 
 
 def compute_anomaly_score(entity_id: str, actual_event: Dict) -> Optional[Dict]:
-    """Compute anomaly score for actual next event"""
-    if DETECTOR_RUNTIME is not None:
-        event = dict(actual_event)
-        event["entity_id"] = entity_id
-        return DETECTOR_RUNTIME.score_event(event, update=True)
-    if MODEL is None or MODEL_META is None:
+    """Compute anomaly score for actual next event via the shared DetectorRuntime.
+    Returns None if no detector bundle is loaded — there is no legacy fallback."""
+    if DETECTOR_RUNTIME is None:
         return None
-    
-    buffer = get_entity_buffer(entity_id)
-    seq_len = MODEL_META.get("seq_len", 64)
-    
-    if len(buffer) < seq_len:
-        return None
-    
-    # Get last seq_len events
-    recent = buffer[-seq_len:]
-    X = np.array([e["token_id"] for e in recent], dtype=np.int32).reshape(1, -1)
-    
-    # Predict with latency tracking
-    t0 = time.perf_counter()
-    probs = MODEL.predict(X, verbose=0)[0]
-    latency_ms = (time.perf_counter() - t0) * 1000
-    PERFORMANCE_METRICS["inference_latency_samples"].append(latency_ms)
-    if len(PERFORMANCE_METRICS["inference_latency_samples"]) > 100:
-        PERFORMANCE_METRICS["inference_latency_samples"] = PERFORMANCE_METRICS["inference_latency_samples"][-100:]
-    PERFORMANCE_METRICS["total_events_scored"] += 1
-    
-    # Get actual token ID
-    actual_token = tokenize_event(actual_event)
-    actual_prob = probs[actual_token] if actual_token < len(probs) else 1e-9
-    
-    # Compute NLL
-    nll = -np.log(np.clip(actual_prob, 1e-9, 1.0))
-    
-    # Compute z-score if we have entity stats
-    z_score = None
-    if ENTITY_STATS is not None:
-        entity_stat = ENTITY_STATS[ENTITY_STATS["entity_id"] == entity_id]
-        if len(entity_stat) > 0:
-            mean_nll = float(entity_stat["mean_nll"].iloc[0])
-            std_nll = float(entity_stat["std_nll"].iloc[0])
-            z_score = (nll - mean_nll) / (std_nll + 1e-6)
-    
-    is_anomaly = (z_score and z_score > CONFIG["alert_threshold"]) or nll > 5.0
-    
-    result = {
-        "entity_id": entity_id,
-        "timestamp": datetime.now().isoformat(),
-        "nll": float(nll),
-        "z_score": float(z_score) if z_score is not None else None,
-        "actual_probability": float(actual_prob),
-        "is_anomaly": bool(is_anomaly),
-    }
-    
-    # Add to alert queue if anomaly
-    if is_anomaly:
-        ALERT_QUEUE.put(result)
-        PERFORMANCE_METRICS["anomalies_flagged"] += 1
-    
-    return result
+    event = dict(actual_event)
+    event["entity_id"] = entity_id
+    return DETECTOR_RUNTIME.score_event(event, update=True)
 
 
 # ============================================
@@ -531,217 +444,14 @@ def get_timeline():
     return jsonify(timeline)
 
 
-def run_r_cicids_adapter(in_csv, out_csv):
-    """Run cicids_into_clean.R to convert CICIDS format to clean format"""
-    import subprocess
-    r_script = os.path.join(os.path.dirname(__file__), "cicids_into_clean.R")
-    if not os.path.exists(r_script):
-        raise FileNotFoundError(f"R adapter script not found: {r_script}")
-    
-    # Try Rscript from PATH
-    rscript_bin = "Rscript"
-    cmd = [rscript_bin, r_script, "--in_csv", in_csv, "--out_csv", out_csv, "--verbose"]
-    
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-    if result.returncode != 0:
-        raise RuntimeError(f"R script failed (exit {result.returncode}):\n{result.stderr}")
-    
-    if not os.path.exists(out_csv):
-        raise RuntimeError(f"R script ran but output file not created: {out_csv}")
-    
-    print(f"R adapter output: {result.stdout}")
-    return out_csv
-
-
-def detect_csv_format(csv_path):
-    """Detect if a CSV is CICIDS raw format or clean format"""
-    df_peek = pd.read_csv(csv_path, nrows=3)
-    # Strip whitespace from column names (CICIDS files often have leading spaces)
-    cols = set(c.strip() for c in df_peek.columns)
-    
-    if {"timestamp", "entity_id", "event_type"}.issubset(cols):
-        return "clean"
-    if {"Timestamp", "Source IP", "Destination IP", "Destination Port", "Protocol"}.issubset(cols):
-        return "cicids"
-    return "unknown"
-
-
 @app.route('/api/train', methods=['POST'])
 def train_model():
-    """Trigger model training in background thread"""
-    global TRAINING_STATE
-
-    if DETECTOR_RUNTIME is not None:
-        return jsonify({
-            "success": False,
-            "message": "Versioned detectors must be trained and calibrated by new.py, then loaded as one bundle."
-        }), 409
-    
-    if TRAINING_STATE["is_training"]:
-        return jsonify({"success": False, "message": "Training already in progress"}), 409
-    
-    try:
-        config = request.json or {}
-        epochs = config.get("epochs", 2)
-        batch_size = config.get("batchSize", 32)
-        learning_rate = config.get("learningRate", 0.0001)
-        
-        def run_training():
-            global MODEL, MODEL_META, TRAINING_STATE
-            try:
-                TRAINING_STATE["is_training"] = True
-                TRAINING_STATE["error"] = None
-                TRAINING_STATE["progress"] = "Loading data..."
-                
-                train_csv = os.path.join(os.path.dirname(__file__), "data", "train_data.csv")
-                if not os.path.exists(train_csv):
-                    raise FileNotFoundError(f"Training data not found: {train_csv}")
-                
-                # Auto-detect format: if CICIDS, run R adapter first
-                fmt = detect_csv_format(train_csv)
-                
-                if fmt == "cicids":
-                    TRAINING_STATE["progress"] = "Running cicids_into_clean.R to preprocess CICIDS data..."
-                    clean_csv = os.path.join(os.path.dirname(__file__), "data", "train_data_clean.csv")
-                    run_r_cicids_adapter(train_csv, clean_csv)
-                    train_csv = clean_csv
-                    fmt = "clean"
-                elif fmt == "unknown":
-                    raise ValueError(
-                        "Unrecognized CSV format. Expected either:\n"
-                        "  • CICIDS format (Timestamp, Source IP, Destination IP, Destination Port, Protocol)\n"
-                        "  • Clean format (timestamp, entity_id, event_type, dst_id, bytes, Label)\n"
-                        "Only CICIDS datasets or datasets in that format are supported."
-                    )
-                
-                TRAINING_STATE["progress"] = "Loading clean data..."
-                
-                # Load and adapt events
-                df = load_and_adapt_events(train_csv, fmt="clean")
-                df = filter_entities(df, min_events_per_entity=10)
-                if len(df) == 0:
-                    raise RuntimeError("No data after filtering entities.")
-                
-                TRAINING_STATE["progress"] = "Splitting data..."
-                
-                # Split train/val (70/15/15)
-                df_tr, df_va, df_te = split_time_within_groups(df, 0.7, 0.15)
-                
-                # Fit tokenization on train only
-                dst_keep = fit_dst_vocab(df_tr, top_n=200)
-                bytes_edges = fit_bytes_bins(df_tr, num_buckets=8)
-                
-                # Token strings
-                for d in (df_tr, df_va, df_te):
-                    d["token_str"] = make_token_strings(d, dst_keep, bytes_edges)
-                
-                df_tr = df_tr.sort_values(["entity_id", "timestamp"]).reset_index(drop=True)
-                df_va = df_va.sort_values(["entity_id", "timestamp"]).reset_index(drop=True)
-                
-                # Build vocab
-                vocab, tok_map, _ = build_vocab_from_buckets(
-                    dst_keep, bytes_edges, df_tr["event_type"].astype(str).unique())
-                vocab_size = len(vocab) + 2  # PAD=0, UNK=1
-                seq_len = 10
-                
-                TRAINING_STATE["progress"] = "Building sequences..."
-                
-                # Build sequences
-                Xtr, ytr, *_ = make_sequences_from_events(df_tr, tok_map, seq_len, step=1)
-                Xva, yva, *_ = make_sequences_from_events(df_va, tok_map, seq_len, step=1)
-                
-                if len(Xtr) == 0 or len(Xva) == 0:
-                    raise RuntimeError("Not enough sequences for training. Need more data.")
-                
-                TRAINING_STATE["progress"] = "Building model..."
-                
-                # Build and train model using improved architecture
-                model = build_improved_transformer_model(
-                    vocab_size=vocab_size,
-                    seq_len=seq_len,
-                    d_model=128,
-                    num_layers=4,
-                    num_heads=8,
-                    lr=learning_rate,
-                )
-                
-                # Prepare datasets
-                def to_onehot(x, y):
-                    return x, tf.one_hot(y, depth=vocab_size)
-                
-                ds_tr = (tf.data.Dataset.from_tensor_slices((Xtr, ytr))
-                         .shuffle(min(50000, len(Xtr)))
-                         .batch(batch_size)
-                         .map(to_onehot, num_parallel_calls=tf.data.AUTOTUNE)
-                         .prefetch(tf.data.AUTOTUNE))
-                
-                ds_va = (tf.data.Dataset.from_tensor_slices((Xva, yva))
-                         .batch(batch_size)
-                         .map(to_onehot, num_parallel_calls=tf.data.AUTOTUNE)
-                         .prefetch(tf.data.AUTOTUNE))
-                
-                # Custom callback to update progress
-                class ProgressCallback(keras.callbacks.Callback):
-                    def on_epoch_end(self, epoch, logs=None):
-                        acc = logs.get("val_acc", 0) * 100
-                        TRAINING_STATE["progress"] = f"Epoch {epoch + 1}/{epochs} — val_acc: {acc:.1f}%"
-                
-                TRAINING_STATE["progress"] = f"Training epoch 1/{epochs}..."
-                
-                model_path = os.path.join(os.path.dirname(__file__), "models", "log_transformer.keras")
-                callbacks = [
-                    keras.callbacks.ModelCheckpoint(model_path, monitor="val_loss", save_best_only=True),
-                    ProgressCallback(),
-                ]
-                
-                history = model.fit(ds_tr, validation_data=ds_va, epochs=epochs, callbacks=callbacks, verbose=1)
-                
-                # Get final validation metrics
-                val_acc = history.history.get("val_acc", [0])[-1] * 100
-                val_top5 = history.history.get("val_top5_acc", [0])[-1] * 100
-                
-                # Reload best model
-                MODEL = keras.models.load_model(model_path)
-                
-                # Update training state with real accuracy
-                TRAINING_STATE["accuracy"] = round(val_acc, 1)
-                TRAINING_STATE["top5_accuracy"] = round(val_top5, 1)
-                TRAINING_STATE["last_trained"] = datetime.now().isoformat()
-                TRAINING_STATE["is_training"] = False
-                # Read detection metrics from pipeline output
-                try:
-                    import json as _json
-                    _ms_path = os.path.join(CONFIG.get("out_dir", "outputs"), "metrics_summary.json")
-                    with open(_ms_path) as _f:
-                        _ms = _json.load(_f)
-                    _det = _ms.get("detection", {})
-                    TRAINING_STATE["roc_auc"] = _det.get("roc_auc")
-                    TRAINING_STATE["pr_auc"] = _det.get("pr_auc")
-                    _roc = _det.get("roc_auc", "N/A")
-                    TRAINING_STATE["progress"] = f"Complete — ROC-AUC: {_roc}"
-                except Exception:
-                    TRAINING_STATE["progress"] = f"Complete — accuracy: {val_acc:.1f}%"
-
-                print(f"Training complete. Val accuracy: {val_acc:.1f}%, Top-5: {val_top5:.1f}%")
-                
-            except Exception as e:
-                TRAINING_STATE["is_training"] = False
-                TRAINING_STATE["error"] = str(e)
-                TRAINING_STATE["progress"] = f"Error: {str(e)}"
-                print(f"Training error: {e}", file=sys.stderr)
-        
-        thread = threading.Thread(target=run_training, daemon=True)
-        thread.start()
-        
-        return jsonify({
-            "success": True,
-            "message": "Model training started",
-            "config": {"epochs": epochs, "batchSize": batch_size, "learningRate": learning_rate},
-            "timestamp": datetime.now().isoformat()
-        })
-        
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    """Versioned detectors are trained and calibrated exclusively by new.py,
+    then loaded here as a detector bundle. This API never trains a model."""
+    return jsonify({
+        "success": False,
+        "message": "Versioned detectors must be trained and calibrated by new.py, then loaded as one bundle."
+    }), 409
 
 
 @app.route('/api/explain', methods=['POST'])
@@ -799,62 +509,6 @@ def train_status():
         "last_trained": TRAINING_STATE["last_trained"],
         "error": TRAINING_STATE["error"],
     })
-
-
-@app.route('/api/upload_csv', methods=['POST'])
-def upload_csv():
-    """Upload a CSV file for training. Accepts CICIDS or clean format.
-    CICIDS files are auto-converted via cicids_into_clean.R."""
-    if 'file' not in request.files:
-        return jsonify({"success": False, "error": "No file provided"}), 400
-    
-    file = request.files['file']
-    if file.filename == '':
-        return jsonify({"success": False, "error": "No file selected"}), 400
-    
-    try:
-        data_dir = os.path.join(os.path.dirname(__file__), "data")
-        os.makedirs(data_dir, exist_ok=True)
-        
-        # Save the uploaded file
-        upload_path = os.path.join(data_dir, "uploaded_raw.csv")
-        file.save(upload_path)
-        
-        # Detect format
-        fmt = detect_csv_format(upload_path)
-        
-        if fmt == "cicids":
-            # Run R adapter to convert to clean format
-            clean_path = os.path.join(data_dir, "train_data.csv")
-            run_r_cicids_adapter(upload_path, clean_path)
-            row_count = sum(1 for _ in open(clean_path)) - 1
-            
-            return jsonify({
-                "success": True,
-                "message": f"CICIDS dataset preprocessed with cicids_into_clean.R and saved ({row_count} rows). Ready to train!",
-                "format": "cicids",
-                "rows": row_count,
-            })
-        elif fmt == "clean":
-            import shutil
-            train_path = os.path.join(data_dir, "train_data.csv")
-            shutil.copy2(upload_path, train_path)
-            row_count = sum(1 for _ in open(train_path)) - 1
-            
-            return jsonify({
-                "success": True,
-                "message": f"Clean-format CSV saved ({row_count} rows). Ready to train!",
-                "format": "clean",
-                "rows": row_count,
-            })
-        else:
-            return jsonify({
-                "success": False,
-                "error": "Unrecognized CSV format. Only CICIDS datasets (Timestamp, Source IP, Destination IP, Destination Port, Protocol) or clean format (timestamp, entity_id, event_type) are supported."
-            }), 400
-            
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
 
 
 @app.route('/api/model/info', methods=['GET'])

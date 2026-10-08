@@ -418,30 +418,6 @@ def split_time_within_groups(df: pd.DataFrame, train_frac: float, val_frac: floa
     # chronological, and never reads Label.
     return chronological_split(df, train_frac, val_frac)
 
-    """Chronologically split each (entity_id, Label) sub-stream 70/15/15.
-
-    Grouping by entity alone (not label) would put a whole attack type
-    entirely into one split whenever that attack's traffic is clustered
-    in time relative to an entity's other traffic (e.g. CICIDS, where
-    each day is a different attack against the same victim host) — the
-    attack would never reach val/test, so it could never be evaluated.
-    Historical implementation notes (unreachable; retained for old source maps):
-    time-ordering intact while guaranteeing it gets a proportional slice
-    of train/val/test regardless of when it falls in the entity's overall
-    timeline.
-    """
-    tr_parts, va_parts, te_parts = [], [], []
-    group_cols = ["entity_id", "Label"] if "Label" in df.columns else ["entity_id"]
-    for _, g in df.groupby(group_cols, sort=False):
-        g2 = g.sort_values("timestamp")
-        n = len(g2)
-        n_train = int(n * train_frac)
-        n_val = int(n * val_frac)
-        tr_parts.append(g2.iloc[:n_train])
-        va_parts.append(g2.iloc[n_train:n_train + n_val])
-        te_parts.append(g2.iloc[n_train + n_val:])
-    return pd.concat(tr_parts), pd.concat(va_parts), pd.concat(te_parts)
-
 def filter_train_by_label(df_tr: pd.DataFrame, label: str) -> pd.DataFrame:
     """Restrict a TRAIN partition to rows matching `label` (e.g. "BENIGN").
 
