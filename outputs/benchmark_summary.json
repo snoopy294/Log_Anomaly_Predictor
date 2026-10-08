@@ -403,5 +403,51 @@
         "macro_attack_family_recall": 0.002119824522380853
       }
     }
+  },
+  "threshold_drift": {
+    "artifact": "outputs/runs/threshold_drift/seed-42/threshold_drift.json",
+    "score": "combo_score",
+    "bundle_seed": 42,
+    "target_fpr": 0.01,
+    "test_days": [
+      "2017-07-05",
+      "2017-07-06",
+      "2017-07-07"
+    ],
+    "policies": {
+      "frozen": {
+        "labels_used_for_threshold": true,
+        "daily_fpr": {
+          "2017-07-05": 0.014400576023040922,
+          "2017-07-06": 0.0757690736092464,
+          "2017-07-07": 0.017733944883879416
+        },
+        "max_daily_fpr": 0.0757690736092464,
+        "mean_daily_recall": 0.9453679745946705,
+        "mean_daily_macro_attack_family_recall": 0.6464616999794688
+      },
+      "prev_day_benign": {
+        "labels_used_for_threshold": true,
+        "daily_fpr": {
+          "2017-07-05": 0.014400576023040922,
+          "2017-07-06": 0.06670947405288657,
+          "2017-07-07": 0.0006840381734138865
+        },
+        "max_daily_fpr": 0.06670947405288657,
+        "mean_daily_recall": 0.8983670057048448,
+        "mean_daily_macro_attack_family_recall": 0.6115229770806098
+      },
+      "prev_day_unlabeled": {
+        "labels_used_for_threshold": false,
+        "daily_fpr": {
+          "2017-07-05": 0.0003075123004920197,
+          "2017-07-06": 1.4009690035607962e-05,
+          "2017-07-07": 0.0002628952681404116
+        },
+        "max_daily_fpr": 0.0003075123004920197,
+        "mean_daily_recall": 0.5194630826064439,
+        "mean_daily_macro_attack_family_recall": 0.33902633176423547
+      }
+    }
   }
 }

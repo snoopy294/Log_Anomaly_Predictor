@@ -53,6 +53,21 @@ def _ablation_lines(ablation: dict) -> list[str]:
     return lines
 
 
+def _drift_lines(drift: dict) -> list[str]:
+    days = drift["test_days"]
+    lines = ["", f"**Threshold drift** (seed {drift['bundle_seed']} bundle, `{drift['score']}`; target FPR "
+                 f"{_pct(drift['target_fpr'])}; each day thresholded using earlier days only)", "",
+             "| Threshold policy | Labels used | " + " | ".join(f"{d[5:]} FPR" for d in days)
+             + " | Max daily FPR | Mean daily recall | Mean daily macro family recall |",
+             "|---|---|" + "---:|" * (len(days) + 3)]
+    for policy, row in drift["policies"].items():
+        lines.append(f"| {policy} | {'yes' if row['labels_used_for_threshold'] else 'no'} | "
+                     + " | ".join(_pct(row["daily_fpr"].get(d)) for d in days)
+                     + f" | {_pct(row['max_daily_fpr'])} | {_pct(row['mean_daily_recall'])} | "
+                     f"{_pct(row['mean_daily_macro_attack_family_recall'])} |")
+    return lines
+
+
 def render(summary: dict) -> str:
     datasets = summary.get("datasets", {})
     if not datasets:
@@ -78,6 +93,8 @@ def render(summary: dict) -> str:
         lines += _selection_lines(summary["selection"])
     if summary.get("ablation"):
         lines += _ablation_lines(summary["ablation"])
+    if summary.get("threshold_drift"):
+        lines += _drift_lines(summary["threshold_drift"])
     lines += ["", "Diagnostic ROC-derived TPR values, when present in artifacts, are not frozen-threshold results."]
     return "\n".join(lines)
 

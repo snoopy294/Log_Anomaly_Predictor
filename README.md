@@ -1,5 +1,7 @@
 # Log Anomaly Predictor
 
+[![tests](https://github.com/snoopy294/Log_Anomaly_Predictor/actions/workflows/tests.yml/badge.svg)](https://github.com/snoopy294/Log_Anomaly_Predictor/actions/workflows/tests.yml)
+
 An unsupervised network-flow detector built around a Transformer next-event model and
 benign-trained behavioral baselines. Offline evaluation and the Flask API consume the
 same versioned detector bundle: vocabulary, destination buckets, byte bins, model,
@@ -82,6 +84,14 @@ All headline values use thresholds frozen on held-out benign calibration traffic
 | combo_without_nll | 99.24% | 68.76% | 94.57% | 2.53% |
 | transformer_nll_z | 0.36% | 0.21% | 16.44% | 0.80% |
 
+**Threshold drift** (seed 42 bundle, `combo_score`; target FPR 1.00%; each day thresholded using earlier days only)
+
+| Threshold policy | Labels used | 07-05 FPR | 07-06 FPR | 07-07 FPR | Max daily FPR | Mean daily recall | Mean daily macro family recall |
+|---|---|---:|---:|---:|---:|---:|---:|
+| frozen | yes | 1.44% | 7.58% | 1.77% | 7.58% | 94.54% | 64.65% |
+| prev_day_benign | yes | 1.44% | 6.67% | 0.07% | 6.67% | 89.84% | 61.15% |
+| prev_day_unlabeled | no | 0.03% | 0.00% | 0.03% | 0.03% | 51.95% | 33.90% |
+
 Diagnostic ROC-derived TPR values, when present in artifacts, are not frozen-threshold results.
 <!-- RESULTS:END -->
 
@@ -102,9 +112,16 @@ published even when they are lower than earlier experiments.
   over seven behavioral window features plus NLL as an eighth. The ablation table shows what
   removing the NLL feature does.
 - **The NLL feature hurts:** removing it raises macro family recall from 66.45% to 68.76%.
-- **The 1% FPR target does not hold on later days.** Thresholds are calibrated on July 4
-  benign traffic; on July 5–7 benign traffic the observed FPR is about 3.9%. Benign traffic
-  drifts day to day, and a single calibration day is not enough to bound it.
+- **The 1% FPR target does not hold on later days, and the miss is mostly one day.**
+  Thresholds are calibrated on July 4 benign traffic; across July 5–7 the observed FPR is
+  about 3.9%. Split by day (threshold-drift table), July 5 and 7 land near target (1.4%,
+  1.8%) and July 6 reaches 7.6%, where precision drops to about 6%. Nightly recalibration does
+  not fix it: retuning on the previous day's benign rows still gives 6.7% on July 6, because
+  July 6 does not look like July 5. Label-free retuning on all of the previous day's traffic
+  holds FPR under 0.1%, but attack-heavy days push the threshold up and mean daily recall
+  falls from 95% to 52% (0% on July 6). A fixed false-positive budget needs either a
+  calibration window longer than one day or a per-entity baseline that adapts. A
+  previous-day quantile is not enough.
 - **Selection order.** The development-only candidate selection was run after the 3-seed test
   results were first published. It independently chose the same score (`equal_weight_combined`
   is the bundle's `combo_score`) at the same threshold (4.29799 for seed 42), so the published
@@ -172,6 +189,12 @@ python scripts/ablate_nll.py --csv data/cicids_clean.csv \
   --bundle models/detector_bundle --out outputs/runs/ablation/seed-42
 ```
 
+Split the frozen-threshold error by test day and compare nightly recalibration policies:
+
+```bash
+python scripts/threshold_drift.py --csv data/cicids_clean.csv   --bundle models/detector_bundle --out outputs/runs/threshold_drift/seed-42
+```
+
 Consolidate reviewed artifacts into the README data source:
 
 ```bash
@@ -180,7 +203,7 @@ python scripts/consolidate_benchmarks.py \
   --run "CICIDS2017 (cicids_days split)=outputs/runs/cicids2017/seed-43/metrics_summary.json" \
   --run "CICIDS2017 (cicids_days split)=outputs/runs/cicids2017/seed-44/metrics_summary.json" \
   --selection outputs/runs/candidate_selection/seed-42-rerun/candidate_selection.json \
-  --ablation outputs/runs/ablation/seed-42/ablation.json
+  --ablation outputs/runs/ablation/seed-42/ablation.json   --drift outputs/runs/threshold_drift/seed-42/threshold_drift.json
 ```
 
 Generate the README table only after consolidating complete
@@ -202,6 +225,7 @@ python scripts/render_results.py --summary outputs/benchmark_summary.json
 | `backend.py` | compatible Flask routes backed by the shared detector runtime |
 | `scripts/select_candidate.py` | runs `benchmark.py`'s candidate screening against a real development split |
 | `scripts/ablate_nll.py` | frozen-bundle ablation: combo score with vs. without the Transformer NLL feature |
+| `scripts/threshold_drift.py` | per-day FPR of the frozen threshold vs. nightly benign and label-free recalibration |
 | `scripts/consolidate_benchmarks.py` | builds `outputs/benchmark_summary.json` from run artifacts |
 | `scripts/render_results.py` | the only writer of the README results block |
 | `tests/` | deterministic split, adapter, metric, scoring, and parity fixtures |

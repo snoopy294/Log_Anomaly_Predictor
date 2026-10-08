@@ -82,8 +82,27 @@ def summarize_ablation(path: str) -> dict:
     return {"artifact": str(path), "bundle_seed": raw.get("bundle_seed"), "variants": variants}
 
 
+def summarize_drift(path: str, score: str = "combo_score") -> dict:
+    raw = _read(path)
+    policies = {}
+    for policy, entry in raw["scores"][score].items():
+        days = entry["days"]
+        macro = [d["macro_attack_family_recall"] for d in days.values()
+                 if d["macro_attack_family_recall"] is not None]
+        policies[policy] = {
+            "labels_used_for_threshold": next(iter(days.values()))["calibration_population"]
+                                         ["labels_used_for_threshold"],
+            "daily_fpr": {day: float(d["observed_test_fpr"]) for day, d in days.items()},
+            "max_daily_fpr": float(entry["max_daily_fpr"]),
+            "mean_daily_recall": float(np.mean([d["recall"] for d in days.values()])),
+            "mean_daily_macro_attack_family_recall": float(np.mean(macro)) if macro else None,
+        }
+    return {"artifact": str(path), "score": score, "bundle_seed": raw.get("bundle_seed"),
+            "target_fpr": float(raw["target_fpr"]), "test_days": raw["test_days"], "policies": policies}
+
+
 def build_summary(runs: list[tuple[str, str]], selection_path: str | None = None,
-                  ablation_path: str | None = None) -> dict:
+                  ablation_path: str | None = None, drift_path: str | None = None) -> dict:
     grouped = defaultdict(list)
     for name, filename in runs:
         grouped[name].append(load_run(filename))
@@ -93,6 +112,8 @@ def build_summary(runs: list[tuple[str, str]], selection_path: str | None = None
         summary["selection"] = summarize_selection(selection_path)
     if ablation_path:
         summary["ablation"] = summarize_ablation(ablation_path)
+    if drift_path:
+        summary["threshold_drift"] = summarize_drift(drift_path)
     return summary
 
 
@@ -102,6 +123,7 @@ def main():
                         help="NAME=metrics.json (repeat for each seed/experiment)")
     parser.add_argument("--selection", help="candidate_selection.json from scripts/select_candidate.py")
     parser.add_argument("--ablation", help="ablation.json from scripts/ablate_nll.py")
+    parser.add_argument("--drift", help="threshold_drift.json from scripts/threshold_drift.py")
     parser.add_argument("--out", default="outputs/benchmark_summary.json")
     args = parser.parse_args()
     runs = []
@@ -110,7 +132,7 @@ def main():
         if not separator:
             parser.error("--run must be NAME=metrics.json")
         runs.append((name, filename))
-    summary = build_summary(runs, args.selection, args.ablation)
+    summary = build_summary(runs, args.selection, args.ablation, args.drift)
     target = Path(args.out)
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps(summary, indent=2, allow_nan=False), encoding="utf-8")

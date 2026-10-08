@@ -1,4 +1,4 @@
-.PHONY: train train-cicids results test serve demo select ablate
+.PHONY: train train-cicids results test serve demo select ablate drift
 
 # Quick run on the tiny synthetic sample (no attack labels, so no detection metrics)
 train:
@@ -33,3 +33,7 @@ select:
 ablate:
 	python scripts/ablate_nll.py --csv data/cicids_clean.csv \
 	  --bundle models/detector_bundle --out outputs/runs/ablation/seed-42
+
+# Per-day threshold drift study with the frozen bundle
+drift:
+	python scripts/threshold_drift.py --csv data/cicids_clean.csv 	  --bundle models/detector_bundle --out outputs/runs/threshold_drift/seed-42
