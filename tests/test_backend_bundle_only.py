@@ -22,3 +22,26 @@ def test_config_no_longer_has_legacy_model_paths():
     assert "model_path" not in backend.CONFIG
     assert "meta_path" not in backend.CONFIG
     assert "stats_path" not in backend.CONFIG
+
+
+def test_train_endpoint_always_rejects_with_guidance_to_new_py(monkeypatch):
+    client = backend.app.test_client()
+
+    monkeypatch.setattr(backend, "DETECTOR_RUNTIME", None)
+    response_no_bundle = client.post("/api/train", json={})
+    assert response_no_bundle.status_code == 409
+    assert "new.py" in response_no_bundle.get_json()["message"]
+
+    monkeypatch.setattr(backend, "DETECTOR_RUNTIME", object())
+    response_with_bundle = client.post("/api/train", json={})
+    assert response_with_bundle.status_code == 409
+    assert "new.py" in response_with_bundle.get_json()["message"]
+
+
+def test_train_status_route_unaffected():
+    client = backend.app.test_client()
+    response = client.get("/api/train/status")
+    assert response.status_code == 200
+    body = response.get_json()
+    assert set(body.keys()) == {"is_training", "progress", "accuracy",
+                                "top5_accuracy", "last_trained", "error"}

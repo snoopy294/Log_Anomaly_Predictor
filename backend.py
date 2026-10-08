@@ -15,7 +15,6 @@ from flask_cors import CORS
 import tensorflow as tf
 from tensorflow import keras
 from datetime import datetime, timedelta
-import threading
 import queue
 from typing import Dict, List, Optional
 import pickle
@@ -541,180 +540,12 @@ def detect_csv_format(csv_path):
 
 @app.route('/api/train', methods=['POST'])
 def train_model():
-    """Trigger model training in background thread"""
-    global TRAINING_STATE
-
-    if DETECTOR_RUNTIME is not None:
-        return jsonify({
-            "success": False,
-            "message": "Versioned detectors must be trained and calibrated by new.py, then loaded as one bundle."
-        }), 409
-    
-    if TRAINING_STATE["is_training"]:
-        return jsonify({"success": False, "message": "Training already in progress"}), 409
-    
-    try:
-        config = request.json or {}
-        epochs = config.get("epochs", 2)
-        batch_size = config.get("batchSize", 32)
-        learning_rate = config.get("learningRate", 0.0001)
-        
-        def run_training():
-            global MODEL, MODEL_META, TRAINING_STATE
-            try:
-                TRAINING_STATE["is_training"] = True
-                TRAINING_STATE["error"] = None
-                TRAINING_STATE["progress"] = "Loading data..."
-                
-                train_csv = os.path.join(os.path.dirname(__file__), "data", "train_data.csv")
-                if not os.path.exists(train_csv):
-                    raise FileNotFoundError(f"Training data not found: {train_csv}")
-                
-                # Auto-detect format: if CICIDS, run R adapter first
-                fmt = detect_csv_format(train_csv)
-                
-                if fmt == "cicids":
-                    TRAINING_STATE["progress"] = "Running cicids_into_clean.R to preprocess CICIDS data..."
-                    clean_csv = os.path.join(os.path.dirname(__file__), "data", "train_data_clean.csv")
-                    run_r_cicids_adapter(train_csv, clean_csv)
-                    train_csv = clean_csv
-                    fmt = "clean"
-                elif fmt == "unknown":
-                    raise ValueError(
-                        "Unrecognized CSV format. Expected either:\n"
-                        "  • CICIDS format (Timestamp, Source IP, Destination IP, Destination Port, Protocol)\n"
-                        "  • Clean format (timestamp, entity_id, event_type, dst_id, bytes, Label)\n"
-                        "Only CICIDS datasets or datasets in that format are supported."
-                    )
-                
-                TRAINING_STATE["progress"] = "Loading clean data..."
-                
-                # Load and adapt events
-                df = load_and_adapt_events(train_csv, fmt="clean")
-                df = filter_entities(df, min_events_per_entity=10)
-                if len(df) == 0:
-                    raise RuntimeError("No data after filtering entities.")
-                
-                TRAINING_STATE["progress"] = "Splitting data..."
-                
-                # Split train/val (70/15/15)
-                df_tr, df_va, df_te = split_time_within_groups(df, 0.7, 0.15)
-                
-                # Fit tokenization on train only
-                dst_keep = fit_dst_vocab(df_tr, top_n=200)
-                bytes_edges = fit_bytes_bins(df_tr, num_buckets=8)
-                
-                # Token strings
-                for d in (df_tr, df_va, df_te):
-                    d["token_str"] = make_token_strings(d, dst_keep, bytes_edges)
-                
-                df_tr = df_tr.sort_values(["entity_id", "timestamp"]).reset_index(drop=True)
-                df_va = df_va.sort_values(["entity_id", "timestamp"]).reset_index(drop=True)
-                
-                # Build vocab
-                vocab, tok_map, _ = build_vocab_from_buckets(
-                    dst_keep, bytes_edges, df_tr["event_type"].astype(str).unique())
-                vocab_size = len(vocab) + 2  # PAD=0, UNK=1
-                seq_len = 10
-                
-                TRAINING_STATE["progress"] = "Building sequences..."
-                
-                # Build sequences
-                Xtr, ytr, *_ = make_sequences_from_events(df_tr, tok_map, seq_len, step=1)
-                Xva, yva, *_ = make_sequences_from_events(df_va, tok_map, seq_len, step=1)
-                
-                if len(Xtr) == 0 or len(Xva) == 0:
-                    raise RuntimeError("Not enough sequences for training. Need more data.")
-                
-                TRAINING_STATE["progress"] = "Building model..."
-                
-                # Build and train model using improved architecture
-                model = build_improved_transformer_model(
-                    vocab_size=vocab_size,
-                    seq_len=seq_len,
-                    d_model=128,
-                    num_layers=4,
-                    num_heads=8,
-                    lr=learning_rate,
-                )
-                
-                # Prepare datasets
-                def to_onehot(x, y):
-                    return x, tf.one_hot(y, depth=vocab_size)
-                
-                ds_tr = (tf.data.Dataset.from_tensor_slices((Xtr, ytr))
-                         .shuffle(min(50000, len(Xtr)))
-                         .batch(batch_size)
-                         .map(to_onehot, num_parallel_calls=tf.data.AUTOTUNE)
-                         .prefetch(tf.data.AUTOTUNE))
-                
-                ds_va = (tf.data.Dataset.from_tensor_slices((Xva, yva))
-                         .batch(batch_size)
-                         .map(to_onehot, num_parallel_calls=tf.data.AUTOTUNE)
-                         .prefetch(tf.data.AUTOTUNE))
-                
-                # Custom callback to update progress
-                class ProgressCallback(keras.callbacks.Callback):
-                    def on_epoch_end(self, epoch, logs=None):
-                        acc = logs.get("val_acc", 0) * 100
-                        TRAINING_STATE["progress"] = f"Epoch {epoch + 1}/{epochs} — val_acc: {acc:.1f}%"
-                
-                TRAINING_STATE["progress"] = f"Training epoch 1/{epochs}..."
-                
-                model_path = os.path.join(os.path.dirname(__file__), "models", "log_transformer.keras")
-                callbacks = [
-                    keras.callbacks.ModelCheckpoint(model_path, monitor="val_loss", save_best_only=True),
-                    ProgressCallback(),
-                ]
-                
-                history = model.fit(ds_tr, validation_data=ds_va, epochs=epochs, callbacks=callbacks, verbose=1)
-                
-                # Get final validation metrics
-                val_acc = history.history.get("val_acc", [0])[-1] * 100
-                val_top5 = history.history.get("val_top5_acc", [0])[-1] * 100
-                
-                # Reload best model
-                MODEL = keras.models.load_model(model_path)
-                
-                # Update training state with real accuracy
-                TRAINING_STATE["accuracy"] = round(val_acc, 1)
-                TRAINING_STATE["top5_accuracy"] = round(val_top5, 1)
-                TRAINING_STATE["last_trained"] = datetime.now().isoformat()
-                TRAINING_STATE["is_training"] = False
-                # Read detection metrics from pipeline output
-                try:
-                    import json as _json
-                    _ms_path = os.path.join(CONFIG.get("out_dir", "outputs"), "metrics_summary.json")
-                    with open(_ms_path) as _f:
-                        _ms = _json.load(_f)
-                    _det = _ms.get("detection", {})
-                    TRAINING_STATE["roc_auc"] = _det.get("roc_auc")
-                    TRAINING_STATE["pr_auc"] = _det.get("pr_auc")
-                    _roc = _det.get("roc_auc", "N/A")
-                    TRAINING_STATE["progress"] = f"Complete — ROC-AUC: {_roc}"
-                except Exception:
-                    TRAINING_STATE["progress"] = f"Complete — accuracy: {val_acc:.1f}%"
-
-                print(f"Training complete. Val accuracy: {val_acc:.1f}%, Top-5: {val_top5:.1f}%")
-                
-            except Exception as e:
-                TRAINING_STATE["is_training"] = False
-                TRAINING_STATE["error"] = str(e)
-                TRAINING_STATE["progress"] = f"Error: {str(e)}"
-                print(f"Training error: {e}", file=sys.stderr)
-        
-        thread = threading.Thread(target=run_training, daemon=True)
-        thread.start()
-        
-        return jsonify({
-            "success": True,
-            "message": "Model training started",
-            "config": {"epochs": epochs, "batchSize": batch_size, "learningRate": learning_rate},
-            "timestamp": datetime.now().isoformat()
-        })
-        
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    """Versioned detectors are trained and calibrated exclusively by new.py,
+    then loaded here as a detector bundle. This API never trains a model."""
+    return jsonify({
+        "success": False,
+        "message": "Versioned detectors must be trained and calibrated by new.py, then loaded as one bundle."
+    }), 409
 
 
 @app.route('/api/explain', methods=['POST'])
