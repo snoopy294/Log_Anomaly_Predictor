@@ -110,7 +110,8 @@ def load_detector_bundle(path: str | Path, *, load_model: bool = True) -> tuple[
 class DetectorRuntime:
     """Canonical stateful scorer used by both offline fixtures and Flask."""
 
-    def __init__(self, bundle: dict, model: Any):
+    def __init__(self, bundle: dict, model: Any, *,
+                 ablations: dict[str, tuple[str, ...]] | None = None):
         self.bundle, self.model = bundle, model
         self.vocab = list(bundle["vocabulary"])
         self.token_map = {token: i + 2 for i, token in enumerate(self.vocab)}
@@ -122,6 +123,16 @@ class DetectorRuntime:
         self.last_alert_time: dict[str, pd.Timestamp] = {}
         self.entity_nll = {str(row["entity_id"]): (float(row["mean_nll"]), float(row["std_nll"]))
                            for row in bundle["entity_nll_stats"]}
+        features = list(bundle["window_baselines"]["features"])
+        self.ablations: dict[str, list[str]] = {}
+        for name, dropped in (ablations or {}).items():
+            unknown = set(dropped) - set(features)
+            if unknown:
+                raise ValueError(f"ablation {name!r} drops unknown features {sorted(unknown)}")
+            kept = [f for f in features if f not in set(dropped)]
+            if not kept:
+                raise ValueError(f"ablation {name!r} drops every feature")
+            self.ablations[name] = kept
 
     def token_string(self, event: dict) -> str:
         from new import bucket_bytes, bucket_dst
@@ -142,12 +153,13 @@ class DetectorRuntime:
                 "bytes_mean": float(byte_values.mean()), "bytes_std": float(byte_values.std()),
                 "repeat_last": float(tokens[-1] == tokens[-2]), "nll": float(nll)}
 
-    def _score_features(self, entity: str, features: dict[str, float]) -> tuple[float, str]:
+    def _score_features(self, entity: str, features: dict[str, float],
+                        names: list[str] | None = None) -> tuple[float, str]:
         baseline = self.bundle["window_baselines"]
         med = baseline["entity_median"].get(entity, baseline["global_median"])
         scale = baseline["entity_scale"].get(entity, baseline["global_scale"])
         contributions = {name: abs(np.clip((features[name] - med[name]) / max(scale[name], 1e-6), -50, 50))
-                         for name in baseline["features"]}
+                         for name in (names if names is not None else baseline["features"])}
         return float(np.mean(list(contributions.values()))), max(contributions, key=contributions.get)
 
     def compute_nll_batch(self, events: pd.DataFrame, batch_size: int = 512) -> dict[Any, float]:
@@ -224,6 +236,8 @@ class DetectorRuntime:
                       "is_anomaly": is_anomaly,
                       "suppressed": bool(suppressed or duplicate), "model_version": self.bundle["model_version"],
                       "warm_up_state": "warm", "batch_one_latency_ms": self.last_latency_ms}
+            for name, kept in self.ablations.items():
+                result[f"score_{name}"] = self._score_features(entity, features, kept)[0]
         if update:
             self.buffers[entity].append(dict(event))
             self.buffers[entity] = self.buffers[entity][-(seq_len + 1):]
