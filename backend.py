@@ -69,9 +69,6 @@ PERFORMANCE_METRICS = {
 
 # Configuration
 CONFIG = {
-    "model_path": "models/log_transformer.keras",
-    "meta_path": "models/log_transformer_meta.json",
-    "stats_path": "outputs/entity_stats.csv",
     "out_dir": "outputs",
     "max_buffer_size": 1000,
     "alert_threshold": 3.0,
@@ -93,49 +90,26 @@ class TakeLastToken(keras.layers.Layer):
 # ============================================
 
 def load_model_and_config():
-    """Load the trained model and configuration"""
+    """Load the versioned detector bundle. Detectors are trained and calibrated
+    exclusively by new.py; there is no legacy raw-.keras loading path."""
     global MODEL, MODEL_META, ENTITY_STATS, VOCAB, TOKENIZER, DETECTOR_RUNTIME
-    
+
+    bundle_path = CONFIG["bundle_path"]
+    if not os.path.exists(os.path.join(bundle_path, "bundle.json")):
+        print(f"! No detector bundle found at {bundle_path}. Train one with new.py first.")
+        return
+
     try:
-        bundle_path = CONFIG["bundle_path"]
-        if os.path.exists(os.path.join(bundle_path, "bundle.json")):
-            MODEL_META, MODEL = load_detector_bundle(bundle_path)
-            DETECTOR_RUNTIME = DetectorRuntime(MODEL_META, MODEL)
-            VOCAB = MODEL_META["vocabulary"]
-            TOKENIZER = DETECTOR_RUNTIME.token_map.copy()
-            TOKENIZER.update({"PAD": 0, "UNK": 1})
-            ENTITY_STATS = pd.DataFrame(MODEL_META["entity_nll_stats"])
-            CONFIG["alert_threshold"] = float(MODEL_META["threshold"])
-            print(f"+ Detector bundle {MODEL_META['model_version']} loaded from {bundle_path}")
-            return
-        if os.path.exists(CONFIG["model_path"]):
-            MODEL = keras.models.load_model(CONFIG["model_path"])
-            print(f"+ Model loaded from {CONFIG['model_path']}")
-        
-        if os.path.exists(CONFIG["meta_path"]):
-            with open(CONFIG["meta_path"], 'r') as f:
-                MODEL_META = json.load(f)
-            print(f"+ Metadata loaded")
-        
-        if os.path.exists(CONFIG["stats_path"]):
-            ENTITY_STATS = pd.read_csv(CONFIG["stats_path"])
-            print(f"+ Entity stats loaded")
-        
-        # Build vocab and tokenizer from meta
-        if MODEL_META:
-            VOCAB = MODEL_META.get("vocabulary")
-            if not VOCAB:
-                raise RuntimeError("legacy metadata has no full vocabulary; retrain to create a detector bundle")
-            # Build reverse tokenizer
-            TOKENIZER = {v: i + 2 for i, v in enumerate(VOCAB)}
-            TOKENIZER["PAD"] = 0
-            TOKENIZER["UNK"] = 1
-            print(f"+ Tokenizer initialized with {len(TOKENIZER)} tokens")
-            
+        MODEL_META, MODEL = load_detector_bundle(bundle_path)
+        DETECTOR_RUNTIME = DetectorRuntime(MODEL_META, MODEL)
+        VOCAB = MODEL_META["vocabulary"]
+        TOKENIZER = DETECTOR_RUNTIME.token_map.copy()
+        TOKENIZER.update({"PAD": 0, "UNK": 1})
+        ENTITY_STATS = pd.DataFrame(MODEL_META["entity_nll_stats"])
+        CONFIG["alert_threshold"] = float(MODEL_META["threshold"])
+        print(f"+ Detector bundle {MODEL_META['model_version']} loaded from {bundle_path}")
     except Exception as e:
-        print(f"! Error loading model: {e}")
-        if os.path.exists(os.path.join(CONFIG["bundle_path"], "bundle.json")):
-            raise RuntimeError(f"detector bundle failed validation: {e}") from e
+        raise RuntimeError(f"detector bundle failed validation: {e}") from e
 
 
 # ============================================
