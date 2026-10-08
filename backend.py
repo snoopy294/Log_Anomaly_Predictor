@@ -116,17 +116,11 @@ def load_model_and_config():
 # ============================================
 
 def tokenize_event(event: Dict) -> int:
-    """Convert event to token ID"""
-    if DETECTOR_RUNTIME is not None:
-        return DETECTOR_RUNTIME.token_id(event)
-    # Build token string
-    event_type = event.get("event_type", "UNK")
-    dst = event.get("dst_id", "OTHER")
-    bytes_bucket = event.get("bytes_bucket", 0)
-    
-    token_str = f"{event_type}|DST={dst}|BYTES_Q{bytes_bucket}"
-    
-    return TOKENIZER.get(token_str, 1)  # 1 = UNK
+    """Convert event to token ID via the shared DetectorRuntime. Returns UNK (1)
+    if no detector bundle is loaded."""
+    if DETECTOR_RUNTIME is None:
+        return 1
+    return DETECTOR_RUNTIME.token_id(event)
 
 
 def get_entity_buffer(entity_id: str) -> List[Dict]:

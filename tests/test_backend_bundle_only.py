@@ -61,3 +61,10 @@ def test_compute_anomaly_score_returns_none_without_detector_runtime(monkeypatch
     monkeypatch.setitem(backend.EVENT_BUFFER, "some_entity", [{"token_id": 2}] * 4)
     result = backend.compute_anomaly_score("some_entity", {"event_type": "tcp:80"})
     assert result is None
+
+
+def test_tokenize_event_returns_unk_without_detector_runtime(monkeypatch):
+    monkeypatch.setattr(backend, "DETECTOR_RUNTIME", None)
+    # A stale TOKENIZER that knows this exact token must not be consulted.
+    monkeypatch.setattr(backend, "TOKENIZER", {"tcp:80|DST=x|BYTES_Q0": 42, "PAD": 0, "UNK": 1})
+    assert backend.tokenize_event({"event_type": "tcp:80", "dst_id": "x", "bytes_bucket": 0}) == 1
