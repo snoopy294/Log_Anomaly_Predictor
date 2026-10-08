@@ -1,5 +1,5 @@
 {
-  "schema_version": "1.0",
+  "schema_version": "1.1",
   "datasets": {
     "CICIDS2017 (cicids_days split)": {
       "seeds": [
@@ -27,6 +27,88 @@
         "benign_alerts_per_10000_events": {
           "mean": 386.1844630155931,
           "std": 28.364559614408698
+        },
+        "macro_attack_family_recall": {
+          "mean": 0.675353326111591,
+          "std": 0.007801611324779029
+        },
+        "batch_one_p95_ms": {
+          "mean": 32.377461700074626,
+          "std": 2.9905136861349724
+        }
+      },
+      "per_family": {
+        "Bot": {
+          "mean": 0.004439890710382495,
+          "std": 0.00024149821761837957,
+          "n_runs": 3,
+          "sample_count": 1952
+        },
+        "DDoS": {
+          "mean": 0.9620777191954696,
+          "std": 0.04466767352253726,
+          "n_runs": 3,
+          "sample_count": 128025
+        },
+        "DoS GoldenEye": {
+          "mean": 0.9823828491855306,
+          "std": 0.003193115153973533,
+          "n_runs": 3,
+          "sample_count": 10293
+        },
+        "DoS Hulk": {
+          "mean": 0.9980242450052074,
+          "std": 0.0007992679495406259,
+          "n_runs": 3,
+          "sample_count": 230123
+        },
+        "DoS Slowhttptest": {
+          "mean": 0.9691459053161181,
+          "std": 0.0021120508444182977,
+          "n_runs": 3,
+          "sample_count": 5499
+        },
+        "DoS slowloris": {
+          "mean": 0.9351851851851851,
+          "std": 0.01709690659299327,
+          "n_runs": 3,
+          "sample_count": 5796
+        },
+        "Heartbleed": {
+          "mean": 0.4242424242424243,
+          "std": 0.04285495643554835,
+          "n_runs": 3,
+          "sample_count": 11
+        },
+        "Infiltration": {
+          "mean": 0.0,
+          "std": 0.0,
+          "n_runs": 3,
+          "sample_count": 23
+        },
+        "PortScan": {
+          "mean": 0.9975483405119938,
+          "std": 1.293925006710194e-05,
+          "n_runs": 3,
+          "sample_count": 158804
+        },
+        "Web Attack \u2013 Brute Force": {
+          "mean": 0.9201504092015041,
+          "std": 0.0036074997633930837,
+          "n_runs": 3,
+          "sample_count": 1507
+        },
+        "Web Attack \u2013 Sql Injection": {
+          "mean": 0.0,
+          "std": 0.0,
+          "n_runs": 3,
+          "sample_count": 21
+        },
+        "Web Attack \u2013 XSS": {
+          "mean": 0.911042944785276,
+          "std": 0.0025045907390421353,
+          "n_runs": 3,
+          "sample_count": 652
         }
       },
       "runs": [
@@ -53,6 +135,58 @@
             "observed_test_fpr": 0.03792695936795727,
             "benign_alerts_per_10000_events": 379.2695936795727
           },
+          "macro_attack_family_recall": 0.6644874334046241,
+          "per_family": {
+            "Bot": {
+              "sample_count": 1952,
+              "recall": 0.004610655737704916
+            },
+            "DDoS": {
+              "sample_count": 128025,
+              "recall": 0.8989103690685413
+            },
+            "DoS GoldenEye": {
+              "sample_count": 10293,
+              "recall": 0.9779461770135043
+            },
+            "DoS Hulk": {
+              "sample_count": 230123,
+              "recall": 0.9970189854990592
+            },
+            "DoS Slowhttptest": {
+              "sample_count": 5499,
+              "recall": 0.9661756683033279
+            },
+            "DoS slowloris": {
+              "sample_count": 5796,
+              "recall": 0.9449620427881298
+            },
+            "Heartbleed": {
+              "sample_count": 11,
+              "recall": 0.36363636363636365
+            },
+            "Infiltration": {
+              "sample_count": 23,
+              "recall": 0.0
+            },
+            "PortScan": {
+              "sample_count": 158804,
+              "recall": 0.997550439535528
+            },
+            "Web Attack \u2013 Brute Force": {
+              "sample_count": 1507,
+              "recall": 0.9150630391506304
+            },
+            "Web Attack \u2013 Sql Injection": {
+              "sample_count": 21,
+              "recall": 0.0
+            },
+            "Web Attack \u2013 XSS": {
+              "sample_count": 652,
+              "recall": 0.9079754601226994
+            }
+          },
+          "batch_one_p95_ms": 33.66791015000671,
           "artifact": "outputs/runs/cicids2017/seed-42/metrics_summary.json"
         },
         {
@@ -78,6 +212,58 @@
             "observed_test_fpr": 0.03554225931943484,
             "benign_alerts_per_10000_events": 355.4225931943484
           },
+          "macro_attack_family_recall": 0.6791288676699524,
+          "per_family": {
+            "Bot": {
+              "sample_count": 1952,
+              "recall": 0.004098360655737654
+            },
+            "DDoS": {
+              "sample_count": 128025,
+              "recall": 0.9941261472368678
+            },
+            "DoS GoldenEye": {
+              "sample_count": 10293,
+              "recall": 0.9853298358107452
+            },
+            "DoS Hulk": {
+              "sample_count": 230123,
+              "recall": 0.9989744614836413
+            },
+            "DoS Slowhttptest": {
+              "sample_count": 5499,
+              "recall": 0.9703582469539916
+            },
+            "DoS slowloris": {
+              "sample_count": 5796,
+              "recall": 0.9111456176673568
+            },
+            "Heartbleed": {
+              "sample_count": 11,
+              "recall": 0.4545454545454546
+            },
+            "Infiltration": {
+              "sample_count": 23,
+              "recall": 0.0
+            },
+            "PortScan": {
+              "sample_count": 158804,
+              "recall": 0.9975630336767336
+            },
+            "Web Attack \u2013 Brute Force": {
+              "sample_count": 1507,
+              "recall": 0.9223623092236231
+            },
+            "Web Attack \u2013 Sql Injection": {
+              "sample_count": 21,
+              "recall": 0.0
+            },
+            "Web Attack \u2013 XSS": {
+              "sample_count": 652,
+              "recall": 0.911042944785276
+            }
+          },
+          "batch_one_p95_ms": 28.244284599998057,
           "artifact": "outputs/runs/cicids2017/seed-43/metrics_summary.json"
         },
         {
@@ -103,9 +289,119 @@
             "observed_test_fpr": 0.04238612021728582,
             "benign_alerts_per_10000_events": 423.8612021728582
           },
+          "macro_attack_family_recall": 0.6824436772601965,
+          "per_family": {
+            "Bot": {
+              "sample_count": 1952,
+              "recall": 0.004610655737704916
+            },
+            "DDoS": {
+              "sample_count": 128025,
+              "recall": 0.9931966412809998
+            },
+            "DoS GoldenEye": {
+              "sample_count": 10293,
+              "recall": 0.9838725347323424
+            },
+            "DoS Hulk": {
+              "sample_count": 230123,
+              "recall": 0.9980792880329216
+            },
+            "DoS Slowhttptest": {
+              "sample_count": 5499,
+              "recall": 0.9709038006910348
+            },
+            "DoS slowloris": {
+              "sample_count": 5796,
+              "recall": 0.949447895100069
+            },
+            "Heartbleed": {
+              "sample_count": 11,
+              "recall": 0.4545454545454546
+            },
+            "Infiltration": {
+              "sample_count": 23,
+              "recall": 0.0
+            },
+            "PortScan": {
+              "sample_count": 158804,
+              "recall": 0.9975315483237198
+            },
+            "Web Attack \u2013 Brute Force": {
+              "sample_count": 1507,
+              "recall": 0.9230258792302588
+            },
+            "Web Attack \u2013 Sql Injection": {
+              "sample_count": 21,
+              "recall": 0.0
+            },
+            "Web Attack \u2013 XSS": {
+              "sample_count": 652,
+              "recall": 0.9141104294478528
+            }
+          },
+          "batch_one_p95_ms": 35.220190350219106,
           "artifact": "outputs/runs/cicids2017/seed-44/metrics_summary.json"
         }
       ]
+    }
+  },
+  "selection": {
+    "artifact": "outputs/runs/candidate_selection/seed-42-rerun/candidate_selection.json",
+    "winner": "equal_weight_combined",
+    "winner_threshold": 4.2979942828618505,
+    "candidates": [
+      {
+        "variant": "transformer_nll",
+        "macro_attack_family_recall": 0.0,
+        "precision": 0.0,
+        "fpr": 0.010001729561448075
+      },
+      {
+        "variant": "equal_weight_combined",
+        "macro_attack_family_recall": 0.84861463952867,
+        "precision": 0.7626803462648285,
+        "fpr": 0.010001729561448075
+      },
+      {
+        "variant": "multi_timescale",
+        "macro_attack_family_recall": 0.0,
+        "precision": 0.0,
+        "fpr": 0.010001729561448075
+      },
+      {
+        "variant": "isolation_forest",
+        "macro_attack_family_recall": 0.0012889725629182114,
+        "precision": 0.00457235072619688,
+        "fpr": 0.010001729561448075
+      }
+    ]
+  },
+  "ablation": {
+    "artifact": "outputs/runs/ablation/seed-42/ablation.json",
+    "bundle_seed": 42,
+    "variants": {
+      "combo_score": {
+        "recall": 0.9687990595310922,
+        "precision": 0.9208920010999385,
+        "f1": 0.9442382653780499,
+        "observed_test_fpr": 0.03701979427072661,
+        "macro_attack_family_recall": 0.6644870401381845
+      },
+      "combo_without_nll": {
+        "recall": 0.9923973849657642,
+        "precision": 0.9457318604287719,
+        "f1": 0.9685028254937308,
+        "observed_test_fpr": 0.025330929060284415,
+        "macro_attack_family_recall": 0.6875596927699101
+      },
+      "transformer_nll_z": {
+        "recall": 0.0035525549651009383,
+        "precision": 0.1644489935175708,
+        "f1": 0.006954865520027704,
+        "observed_test_fpr": 0.008029179132002786,
+        "macro_attack_family_recall": 0.002119824522380853
+      }
     }
   }
 }

@@ -1,4 +1,4 @@
-.PHONY: train train-cicids results test serve demo
+.PHONY: train train-cicids results test serve demo select ablate
 
 # Quick run on the tiny synthetic sample (no attack labels, so no detection metrics)
 train:
@@ -23,3 +23,13 @@ serve:
 	python backend.py
 
 demo: serve
+
+# Development-only candidate selection with the frozen bundle
+select:
+	python scripts/select_candidate.py --csv data/cicids_clean.csv \
+	  --bundle models/detector_bundle --out outputs/runs/candidate_selection/seed-42-rerun
+
+# NLL-feature ablation with the frozen bundle
+ablate:
+	python scripts/ablate_nll.py --csv data/cicids_clean.csv \
+	  --bundle models/detector_bundle --out outputs/runs/ablation/seed-42
