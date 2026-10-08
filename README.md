@@ -8,13 +8,13 @@ suppression policy are all hashed and loaded together.
 
 ```mermaid
 flowchart TD
-  raw["Raw flows<br/>CICIDS2017 / UNSW-NB15"] --> clean["cicids_to_clean.py · datasets.py<br/>timestamp, entity, event type, peer, bytes"]
+  raw["Raw flows<br/>CICIDS2017"] --> clean["cicids_to_clean.py · datasets.py<br/>timestamp, entity, event type, peer, bytes"]
   clean --> train["new.py<br/>Transformer next-event model<br/>trained on benign July 3"]
   train --> base["Per-entity NLL stats +<br/>behavioral window baselines"]
   base --> score["combo_score<br/>mean robust z of 7 window features + NLL"]
   score --> cal["Threshold at 1% FPR<br/>benign July 4 only"]
   cal --> bundle[("Hashed detector bundle")]
-  bundle --> offline["Offline evaluation<br/>July 5–7, ablation, zero-shot"]
+  bundle --> offline["Offline evaluation<br/>July 5–7 test, NLL ablation"]
   bundle --> api["backend.py Flask API<br/>+ frontend.html dashboard"]
 ```
 
@@ -24,10 +24,11 @@ flowchart TD
   on benign July 4 traffic; use July 4 attack labels only to select among the fixed
   candidate set. After selection, freeze preprocessing, score, threshold, and
   suppression and evaluate July 5–7 once.
-- **UNSW-NB15 retrained:** use the full time-bearing release and a global chronological
-  60/20/20 split, with benign-only fitting and benign calibration.
-- **UNSW-NB15 zero-shot:** apply the frozen CICIDS bundle and threshold without any
-  UNSW tuning. This is a stress test, not a selection input.
+- **UNSW-NB15 retrained (not yet run):** use the full time-bearing release and a global
+  chronological 60/20/20 split, with benign-only fitting and benign calibration.
+- **UNSW-NB15 zero-shot (not yet run):** apply the frozen CICIDS bundle and threshold
+  without any UNSW tuning. This is a stress test, not a selection input. The adapter and
+  scoring script are implemented and tested; no UNSW results are published.
 - Candidate selection maximizes macro attack-family recall at validation FPR ≤ 1%,
   breaking ties by precision and then p95 latency. Per-candidate latency is not
   measured, so that last tie-break is currently inactive (recorded as `null`); the
@@ -133,7 +134,9 @@ python new.py --train_csv data/cicids_clean.csv --train_format clean \
   --bundle_dir models/detector_bundle
 ```
 
-For retrained UNSW-NB15, use the full release containing `Stime`, `srcip`, and `dstip`:
+The UNSW-NB15 runs below have not been run yet; the commands are kept for when the
+dataset is available. For retrained UNSW-NB15, use the full release containing `Stime`,
+`srcip`, and `dstip`:
 
 ```bash
 python new.py --train_csv data/unsw_nb15_full.csv --train_format unsw \
