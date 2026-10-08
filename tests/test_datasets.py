@@ -37,3 +37,18 @@ def test_cicids_day_boundaries():
         "2017-07-07T23:59:59Z"]), "Label": ["BENIGN"] * 4})
     train, dev, test = cicids_day_split(df)
     assert [len(train), len(dev), len(test)] == [1, 1, 2]
+
+
+def test_unsw_cicids_event_type_scheme_matches_cicids_vocabulary():
+    raw = pd.DataFrame({"Stime": [1_500_000_000 + i for i in range(6)], "dstip": ["d"] * 6,
+                        "srcip": ["s"] * 6, "proto": ["tcp", "udp", "icmp", "tcp", "tcp", "tcp"],
+                        "dsport": ["80", "53", "0", "60000", "0x000b", "-"],
+                        "sbytes": [1] * 6, "dbytes": [1] * 6})
+    out = adapt_unsw_nb15(raw, event_type_scheme="cicids")
+    assert out["event_type"].tolist() == ["TCP_WELL_KNOWN", "UDP_WELL_KNOWN", "P0_WELL_KNOWN",
+                                          "TCP_EPHEMERAL", "TCP_REGISTERED", "TCP_REGISTERED"]
+
+
+def test_unsw_unknown_event_type_scheme_is_rejected():
+    with pytest.raises(ValueError, match="event_type_scheme"):
+        adapt_unsw_nb15(pd.DataFrame(), event_type_scheme="bogus")

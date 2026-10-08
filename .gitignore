@@ -54,4 +54,5 @@ outputs/alert_packets/
 # Raw benchmark datasets and immutable local runs (publish only reviewed summaries).
 data/cicids*.csv
 data/unsw*.csv
+data/raw_unsw/
 outputs/runs/

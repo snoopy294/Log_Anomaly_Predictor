@@ -11,6 +11,7 @@ import pandas as pd
 
 BENIGN_LABELS = {"", "0", "benign", "normal", "none", "nan"}
 UNSW_REQUIRED = {"Stime", "dstip", "srcip", "proto", "dsport", "sbytes", "dbytes"}
+UNSW_EVENT_TYPE_SCHEMES = ("proto_port", "cicids")
 
 
 def normalize_label(value: object, numeric_label: object | None = None) -> str:
@@ -24,13 +25,22 @@ def normalize_label(value: object, numeric_label: object | None = None) -> str:
     return text or ("ATTACK" if pd.notna(numeric) and int(numeric) else "BENIGN")
 
 
-def adapt_unsw_nb15(df: pd.DataFrame, *, drop_malformed: bool = True) -> pd.DataFrame:
+def adapt_unsw_nb15(df: pd.DataFrame, *, drop_malformed: bool = True,
+                    event_type_scheme: str = "proto_port") -> pd.DataFrame:
     """Adapt the time-bearing UNSW-NB15 release to the detector event schema.
 
     The commonly distributed pre-split training/testing files omit source and
     destination IPs. They are deliberately rejected: zero-shot/entity behavior
     needs the full release containing ``Stime``, ``srcip`` and ``dstip``.
+
+    ``event_type_scheme="cicids"`` maps protocol/port to the CICIDS port-class
+    tokens (``TCP_WELL_KNOWN`` ...) so a frozen CICIDS bundle's vocabulary
+    applies; non-numeric ports (e.g. hex ``0x000b``) fall into ``_REGISTERED``
+    exactly as CICIDS's own NaN-port rule does.
     """
+    if event_type_scheme not in UNSW_EVENT_TYPE_SCHEMES:
+        raise ValueError(f"event_type_scheme must be one of {UNSW_EVENT_TYPE_SCHEMES}, "
+                         f"got {event_type_scheme!r}")
     source = df.copy()
     source.columns = [str(c).strip() for c in source.columns]
     missing = sorted(UNSW_REQUIRED - set(source.columns))
@@ -45,11 +55,19 @@ def adapt_unsw_nb15(df: pd.DataFrame, *, drop_malformed: bool = True) -> pd.Data
     attack = source["attack_cat"] if "attack_cat" in source else pd.Series("", index=source.index)
     numeric = source["label"] if "label" in source else pd.Series(np.nan, index=source.index)
 
+    if event_type_scheme == "cicids":
+        from cicids_to_clean import event_type_from_proto_dport
+        # Plain object strings: nullable-string NA would poison np.select's comparisons.
+        event_type = event_type_from_proto_dport(proto.fillna("").astype(str),
+                                                 dsport.fillna("").astype(str))
+    else:
+        event_type = proto + ":" + dsport
+
     out = pd.DataFrame({
         "timestamp": timestamp,
         "entity_id": source["dstip"].astype("string").str.strip(),
         "dst_id": source["srcip"].astype("string").str.strip(),
-        "event_type": proto + ":" + dsport,
+        "event_type": event_type,
         "bytes": sbytes + dbytes,
         "Label": [normalize_label(a, n) for a, n in zip(attack, numeric)],
     })
