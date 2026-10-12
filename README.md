@@ -84,13 +84,13 @@ All headline values use thresholds frozen on held-out benign calibration traffic
 | combo_without_nll | 99.24% | 68.76% | 94.57% | 2.53% |
 | transformer_nll_z | 0.36% | 0.21% | 16.44% | 0.80% |
 
-**Threshold drift** (seed 42 bundle, `combo_score`; target FPR 1.00%; each day thresholded using earlier days only)
+**Threshold drift** (seeds 42, 43, 44 bundles; mean ± std, `combo_score`; target FPR 1.00%; each day thresholded using earlier days only)
 
 | Threshold policy | Labels used | 07-05 FPR | 07-06 FPR | 07-07 FPR | Max daily FPR | Mean daily recall | Mean daily macro family recall |
 |---|---|---:|---:|---:|---:|---:|---:|
-| frozen | yes | 1.44% | 7.58% | 1.77% | 7.58% | 94.54% | 64.65% |
-| prev_day_benign | yes | 1.44% | 6.67% | 0.07% | 6.67% | 89.84% | 61.15% |
-| prev_day_unlabeled | no | 0.03% | 0.00% | 0.03% | 0.03% | 51.95% | 33.90% |
+| frozen | yes | 1.46 ± 0.06% | 7.86 ± 0.25% | 1.90 ± 0.23% | 7.86 ± 0.25% | 95.56 ± 0.75% | 65.82 ± 0.84% |
+| prev_day_benign | yes | 1.46 ± 0.06% | 6.47 ± 0.16% | 0.07 ± 0.00% | 6.47 ± 0.16% | 89.81 ± 0.02% | 61.59 ± 0.31% |
+| prev_day_unlabeled | no | 0.03 ± 0.00% | 0.00 ± 0.00% | 0.02 ± 0.00% | 0.03 ± 0.00% | 52.34 ± 0.29% | 34.07 ± 0.13% |
 
 Diagnostic ROC-derived TPR values, when present in artifacts, are not frozen-threshold results.
 <!-- RESULTS:END -->
@@ -114,14 +114,19 @@ published even when they are lower than earlier experiments.
 - **The NLL feature hurts:** removing it raises macro family recall from 66.45% to 68.76%.
 - **The 1% FPR target does not hold on later days, and the miss is mostly one day.**
   Thresholds are calibrated on July 4 benign traffic; across July 5–7 the observed FPR is
-  about 3.9%. Split by day (threshold-drift table), July 5 and 7 land near target (1.4%,
-  1.8%) and July 6 reaches 7.6%, where precision drops to about 6%. Nightly recalibration does
-  not fix it: retuning on the previous day's benign rows still gives 6.7% on July 6, because
-  July 6 does not look like July 5. Label-free retuning on all of the previous day's traffic
-  holds FPR under 0.1%, but attack-heavy days push the threshold up and mean daily recall
-  falls from 95% to 52% (0% on July 6). A fixed false-positive budget needs either a
+  about 3.9%. Split by day (threshold-drift table, mean of three seeds), July 5 and 7 land
+  near target (1.5%, 1.9%) and July 6 reaches 7.9%, where precision drops to about 6%. Nightly
+  recalibration does not fix it: retuning on the previous day's benign rows still gives 6.5% on
+  July 6, because July 6 does not look like July 5. Label-free retuning on all of the previous
+  day's traffic holds FPR under 0.1%, but attack-heavy days push the threshold up and mean daily
+  recall falls from 96% to 52% (0% on July 6). Every seed shows the same pattern; the largest
+  per-day standard deviation is 0.25 points. A fixed false-positive budget needs either a
   calibration window longer than one day or a per-entity baseline that adapts. A
   previous-day quantile is not enough.
+  - The drift table's seed-43 and seed-44 bundles are **retrains**. The original bundles
+    behind the published seed-43/44 headline metrics were not kept, and GPU training is not
+    bit-deterministic, so these are fresh runs with the same flags and seeds. The seed-42 row
+    uses the shipped `models/detector_bundle`. The headline tables above are unchanged.
   - **Most of the July 6 excess appears to be mislabeled attack traffic, not benign drift.**
     `scripts/explain_false_positives.py` (seed 42) attributes 91.5% of July 6's 32,450 benign
     alerts to a single source, 192.168.10.8, the host compromised in the Infiltration attack.
@@ -221,6 +226,10 @@ python scripts/threshold_drift.py --csv data/cicids_clean.csv \
   --bundle models/detector_bundle --out outputs/runs/threshold_drift/seed-42
 ```
 
+For seeds 43 and 44, retrain with `make train-cicids` flags plus `--seed 4x --bundle_dir
+outputs/runs/bundles/seed-4x`, then rerun the command above with that `--bundle` and
+`--out outputs/runs/threshold_drift/seed-4x`.
+
 Break each test day's false positives down by entity, cold-start status, top feature, hour,
 and source peer:
 
@@ -238,7 +247,9 @@ python scripts/consolidate_benchmarks.py \
   --run "CICIDS2017 (cicids_days split)=outputs/runs/cicids2017/seed-44/metrics_summary.json" \
   --selection outputs/runs/candidate_selection/seed-42-rerun/candidate_selection.json \
   --ablation outputs/runs/ablation/seed-42/ablation.json \
-  --drift outputs/runs/threshold_drift/seed-42/threshold_drift.json
+  --drift outputs/runs/threshold_drift/seed-42/threshold_drift.json \
+  --drift outputs/runs/threshold_drift/seed-43/threshold_drift.json \
+  --drift outputs/runs/threshold_drift/seed-44/threshold_drift.json
 ```
 
 Generate the README table only after consolidating complete
