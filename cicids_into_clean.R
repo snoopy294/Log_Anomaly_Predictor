@@ -58,15 +58,19 @@ event_type_from_proto_dport <- function(proto, dport) {
 
 
 parse_timestamp_utc <- function(x) {
-  # CICIDS often looks like "4/7/2017 8:54" or "4/7/2017 8:54:00"
-  # Try common orders robustly, assume UTC if no tz.
+  # CICIDS looks like "4/7/2017 8:54" or "04/07/2017 08:54:00" (day first:
+  # 4 July 2017). Month-first orders would misread it, so they are not tried.
   t <- suppressWarnings(parse_date_time(
     x,
-    orders = c("mdy HM", "mdy HMS", "dmy HM", "dmy HMS", "Ymd HMS", "Ymd HM"),
+    orders = c("dmy HMS", "dmy HM", "Ymd HMS", "Ymd HM"),
     tz = "UTC"
   ))
-  # Ensure POSIXct in UTC
-  force_tz(as.POSIXct(t), tzone = "UTC")
+  t <- force_tz(as.POSIXct(t), tzone = "UTC")
+  # CICIDS2017 writes a 12-hour clock with no AM/PM marker, and the capture
+  # runs roughly 08:00-17:00, so 1:00-7:59 are afternoon times.
+  afternoon <- !is.na(t) & hour(t) >= 1 & hour(t) <= 7
+  t[afternoon] <- t[afternoon] + hours(12)
+  t
 }
 
 option_list <- list(
