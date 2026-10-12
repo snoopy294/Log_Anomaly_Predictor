@@ -122,6 +122,31 @@ published even when they are lower than earlier experiments.
   falls from 95% to 52% (0% on July 6). A fixed false-positive budget needs either a
   calibration window longer than one day or a per-entity baseline that adapts. A
   previous-day quantile is not enough.
+  - **Most of the July 6 excess appears to be mislabeled attack traffic, not benign drift.**
+    `scripts/explain_false_positives.py` (seed 42) attributes 91.5% of July 6's 32,450 benign
+    alerts to a single source, 192.168.10.8, the host compromised in the Infiltration attack.
+    Without that source, July 6's FPR is 0.81%, under target. The alerts land on internal hosts
+    (192.168.10.{14,15,50,5,9,16}) during parsed hour 3 (about 3 PM, the Infiltration window;
+    FPR 24.4% in that hour), driven by `dst_top_share` and NLL. This looks like the infected host's
+    internal port scan: .8 normally sends each of these hosts 40–70 flows an hour, but here it
+    sends tens of thousands, and only 36 rows are labeled Infiltration. CICIDS2017 is known to label
+    much of that phase BENIGN (Engelen et al., 2021, *Troubleshooting an Intrusion Detection
+    Dataset: the CICIDS2017 Case Study*). The published metrics keep the dataset's labels as they
+    are, so July 6's FPR is probably overstated and its precision understated. July 5 and 7 show
+    ordinary concentration instead: one destination gets 42% (192.168.10.5) and 74% (172.16.0.1)
+    of the day's alerts. 172.16.0.1 is the firewall address and is cold-start, so it has no
+    per-entity baseline.
+- **Known data bug: afternoon timestamps are out of order.** CICIDS2017 writes a 12-hour
+  clock with no AM/PM marker, and `cicids_to_clean.py` (and `cicids_into_clean.R`) parse it
+  as-is. The capture runs from about 8 AM to 5 PM, so afternoon flows parse as 01:00–07:59 and
+  sort *before* the morning flows of the same day. Day membership is unaffected, so the
+  train/development/test split is the same. The order within each day is not causal, though:
+  sequence windows, rolling entity features and the cold-start state see afternoon traffic
+  first. The fix (shift parsed hours 1–7 by +12h, with a test) is on branch
+  [`fix/cicids-12h-timestamps`](../../tree/fix/cicids-12h-timestamps). It is not merged
+  because it changes the dataset hash, so every published number would need to be rerun.
+  All results above use the uncorrected ordering. "Hour" in the analysis below means the
+  parsed hour, so hour 3 is about 3 PM.
 - **Selection order.** The development-only candidate selection was run after the 3-seed test
   results were first published. It independently chose the same score (`equal_weight_combined`
   is the bundle's `combo_score`) at the same threshold (4.29799 for seed 42), so the published
@@ -192,7 +217,16 @@ python scripts/ablate_nll.py --csv data/cicids_clean.csv \
 Split the frozen-threshold error by test day and compare nightly recalibration policies:
 
 ```bash
-python scripts/threshold_drift.py --csv data/cicids_clean.csv   --bundle models/detector_bundle --out outputs/runs/threshold_drift/seed-42
+python scripts/threshold_drift.py --csv data/cicids_clean.csv \
+  --bundle models/detector_bundle --out outputs/runs/threshold_drift/seed-42
+```
+
+Break each test day's false positives down by entity, cold-start status, top feature, hour,
+and source peer:
+
+```bash
+python scripts/explain_false_positives.py --csv data/cicids_clean.csv \
+  --bundle models/detector_bundle --out outputs/runs/false_positives/seed-42
 ```
 
 Consolidate reviewed artifacts into the README data source:
@@ -203,7 +237,8 @@ python scripts/consolidate_benchmarks.py \
   --run "CICIDS2017 (cicids_days split)=outputs/runs/cicids2017/seed-43/metrics_summary.json" \
   --run "CICIDS2017 (cicids_days split)=outputs/runs/cicids2017/seed-44/metrics_summary.json" \
   --selection outputs/runs/candidate_selection/seed-42-rerun/candidate_selection.json \
-  --ablation outputs/runs/ablation/seed-42/ablation.json   --drift outputs/runs/threshold_drift/seed-42/threshold_drift.json
+  --ablation outputs/runs/ablation/seed-42/ablation.json \
+  --drift outputs/runs/threshold_drift/seed-42/threshold_drift.json
 ```
 
 Generate the README table only after consolidating complete
@@ -226,6 +261,7 @@ python scripts/render_results.py --summary outputs/benchmark_summary.json
 | `scripts/select_candidate.py` | runs `benchmark.py`'s candidate screening against a real development split |
 | `scripts/ablate_nll.py` | frozen-bundle ablation: combo score with vs. without the Transformer NLL feature |
 | `scripts/threshold_drift.py` | per-day FPR of the frozen threshold vs. nightly benign and label-free recalibration |
+| `scripts/explain_false_positives.py` | per-day false-positive breakdown by entity, cold start, feature, hour, and peer |
 | `scripts/consolidate_benchmarks.py` | builds `outputs/benchmark_summary.json` from run artifacts |
 | `scripts/render_results.py` | the only writer of the README results block |
 | `tests/` | deterministic split, adapter, metric, scoring, and parity fixtures |

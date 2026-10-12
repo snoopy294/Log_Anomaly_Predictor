@@ -55,16 +55,23 @@ def _ablation_lines(ablation: dict) -> list[str]:
 
 def _drift_lines(drift: dict) -> list[str]:
     days = drift["test_days"]
-    lines = ["", f"**Threshold drift** (seed {drift['bundle_seed']} bundle, `{drift['score']}`; target FPR "
+    seeds = drift["bundle_seeds"]
+    if len(seeds) == 1:
+        source = f"seed {seeds[0]} bundle"
+        cell = lambda value: _pct(value["mean"] if value else None)  # noqa: E731
+    else:
+        source = f"seeds {', '.join(map(str, seeds))} bundles; mean ± std"
+        cell = lambda value: _mean_std(value, True)  # noqa: E731
+    lines = ["", f"**Threshold drift** ({source}, `{drift['score']}`; target FPR "
                  f"{_pct(drift['target_fpr'])}; each day thresholded using earlier days only)", "",
              "| Threshold policy | Labels used | " + " | ".join(f"{d[5:]} FPR" for d in days)
              + " | Max daily FPR | Mean daily recall | Mean daily macro family recall |",
              "|---|---|" + "---:|" * (len(days) + 3)]
     for policy, row in drift["policies"].items():
         lines.append(f"| {policy} | {'yes' if row['labels_used_for_threshold'] else 'no'} | "
-                     + " | ".join(_pct(row["daily_fpr"].get(d)) for d in days)
-                     + f" | {_pct(row['max_daily_fpr'])} | {_pct(row['mean_daily_recall'])} | "
-                     f"{_pct(row['mean_daily_macro_attack_family_recall'])} |")
+                     + " | ".join(cell(row["daily_fpr"].get(d)) for d in days)
+                     + f" | {cell(row['max_daily_fpr'])} | {cell(row['mean_daily_recall'])} | "
+                     f"{cell(row['mean_daily_macro_attack_family_recall'])} |")
     return lines
 
 

@@ -2,6 +2,7 @@ import json
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from scripts.threshold_drift import POLICIES, evaluate_days
 
@@ -63,9 +64,33 @@ def test_drift_flows_through_consolidation_and_render(tmp_path):
     raw["bundle_seed"] = 42
     path = tmp_path / "threshold_drift.json"
     path.write_text(json.dumps(raw), encoding="utf-8")
-    drift = summarize_drift(str(path))
+    drift = summarize_drift([str(path)])
     assert drift["policies"]["prev_day_unlabeled"]["labels_used_for_threshold"] is False
     assert set(drift["policies"]["frozen"]["daily_fpr"]) == {"2017-07-05", "2017-07-06"}
     text = render({"datasets": {"x": {"seeds": [42], "aggregate": {}}}, "threshold_drift": drift})
     assert "**Threshold drift**" in text and "| prev_day_unlabeled | no |" in text
-    assert "07-05 FPR" in text
+    assert "07-05 FPR" in text and "seed 42 bundle" in text and " ± " not in text
+
+
+def test_drift_aggregates_mean_and_std_across_seeds(tmp_path):
+    from scripts.consolidate_benchmarks import summarize_drift
+    from scripts.render_results import render
+
+    paths = []
+    for seed, shift in ((42, 0.0), (43, 0.02)):
+        raw = evaluate_days(_stream(), development_day="2017-07-04", target_fpr=0.05)
+        raw["bundle_seed"] = seed
+        frozen = raw["scores"]["combo_score"]["frozen"]
+        frozen["max_daily_fpr"] += shift
+        for day in frozen["days"].values():
+            day["observed_test_fpr"] += shift
+        paths.append(tmp_path / f"seed-{seed}.json")
+        paths[-1].write_text(json.dumps(raw), encoding="utf-8")
+
+    drift = summarize_drift([str(p) for p in paths])
+    assert drift["bundle_seeds"] == [42, 43]
+    max_fpr = drift["policies"]["frozen"]["max_daily_fpr"]
+    assert max_fpr["std"] == pytest.approx(0.01) and max_fpr["n_runs"] == 2
+    assert drift["policies"]["prev_day_benign"]["max_daily_fpr"]["std"] == 0.0
+    text = render({"datasets": {"x": {"seeds": [42], "aggregate": {}}}, "threshold_drift": drift})
+    assert "seeds 42, 43 bundles; mean ± std" in text and " ± " in text

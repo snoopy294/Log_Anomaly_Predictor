@@ -82,27 +82,49 @@ def summarize_ablation(path: str) -> dict:
     return {"artifact": str(path), "bundle_seed": raw.get("bundle_seed"), "variants": variants}
 
 
-def summarize_drift(path: str, score: str = "combo_score") -> dict:
-    raw = _read(path)
+def _drift_policy(entry: dict) -> dict:
+    days = entry["days"]
+    macro = [d["macro_attack_family_recall"] for d in days.values()
+             if d["macro_attack_family_recall"] is not None]
+    return {
+        "labels_used_for_threshold": next(iter(days.values()))["calibration_population"]
+                                     ["labels_used_for_threshold"],
+        "daily_fpr": {day: float(d["observed_test_fpr"]) for day, d in days.items()},
+        "max_daily_fpr": float(entry["max_daily_fpr"]),
+        "mean_daily_recall": float(np.mean([d["recall"] for d in days.values()])),
+        "mean_daily_macro_attack_family_recall": float(np.mean(macro)) if macro else None,
+    }
+
+
+def _mean_std_n(values) -> dict | None:
+    values = [v for v in values if v is not None]
+    return {**_mean_std(values), "n_runs": len(values)} if values else None
+
+
+def summarize_drift(paths: list[str], score: str = "combo_score") -> dict:
+    """One threshold_drift.json per bundle seed; every metric becomes mean/std/n_runs."""
+    raws = [_read(path) for path in paths]
+    test_days = raws[0]["test_days"]
+    if any(raw["test_days"] != test_days or raw["target_fpr"] != raws[0]["target_fpr"] for raw in raws):
+        raise ValueError("threshold drift artifacts disagree on test days or target FPR")
+    per_seed = [{policy: _drift_policy(entry) for policy, entry in raw["scores"][score].items()}
+                for raw in raws]
     policies = {}
-    for policy, entry in raw["scores"][score].items():
-        days = entry["days"]
-        macro = [d["macro_attack_family_recall"] for d in days.values()
-                 if d["macro_attack_family_recall"] is not None]
+    for policy, first in per_seed[0].items():
+        rows = [seed[policy] for seed in per_seed]
         policies[policy] = {
-            "labels_used_for_threshold": next(iter(days.values()))["calibration_population"]
-                                         ["labels_used_for_threshold"],
-            "daily_fpr": {day: float(d["observed_test_fpr"]) for day, d in days.items()},
-            "max_daily_fpr": float(entry["max_daily_fpr"]),
-            "mean_daily_recall": float(np.mean([d["recall"] for d in days.values()])),
-            "mean_daily_macro_attack_family_recall": float(np.mean(macro)) if macro else None,
+            "labels_used_for_threshold": first["labels_used_for_threshold"],
+            "daily_fpr": {day: _mean_std_n([row["daily_fpr"].get(day) for row in rows]) for day in test_days},
+            **{key: _mean_std_n([row[key] for row in rows])
+               for key in ("max_daily_fpr", "mean_daily_recall", "mean_daily_macro_attack_family_recall")},
         }
-    return {"artifact": str(path), "score": score, "bundle_seed": raw.get("bundle_seed"),
-            "target_fpr": float(raw["target_fpr"]), "test_days": raw["test_days"], "policies": policies}
+    return {"artifacts": [str(path) for path in paths], "score": score,
+            "bundle_seeds": [raw.get("bundle_seed") for raw in raws],
+            "target_fpr": float(raws[0]["target_fpr"]), "test_days": test_days, "policies": policies}
 
 
 def build_summary(runs: list[tuple[str, str]], selection_path: str | None = None,
-                  ablation_path: str | None = None, drift_path: str | None = None) -> dict:
+                  ablation_path: str | None = None, drift_paths: list[str] | None = None) -> dict:
     grouped = defaultdict(list)
     for name, filename in runs:
         grouped[name].append(load_run(filename))
@@ -112,8 +134,8 @@ def build_summary(runs: list[tuple[str, str]], selection_path: str | None = None
         summary["selection"] = summarize_selection(selection_path)
     if ablation_path:
         summary["ablation"] = summarize_ablation(ablation_path)
-    if drift_path:
-        summary["threshold_drift"] = summarize_drift(drift_path)
+    if drift_paths:
+        summary["threshold_drift"] = summarize_drift(drift_paths)
     return summary
 
 
@@ -123,7 +145,8 @@ def main():
                         help="NAME=metrics.json (repeat for each seed/experiment)")
     parser.add_argument("--selection", help="candidate_selection.json from scripts/select_candidate.py")
     parser.add_argument("--ablation", help="ablation.json from scripts/ablate_nll.py")
-    parser.add_argument("--drift", help="threshold_drift.json from scripts/threshold_drift.py")
+    parser.add_argument("--drift", action="append",
+                        help="threshold_drift.json from scripts/threshold_drift.py (repeat per bundle seed)")
     parser.add_argument("--out", default="outputs/benchmark_summary.json")
     args = parser.parse_args()
     runs = []
