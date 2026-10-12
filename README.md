@@ -127,6 +127,9 @@ published even when they are lower than earlier experiments.
     behind the published seed-43/44 headline metrics were not kept, and GPU training is not
     bit-deterministic, so these are fresh runs with the same flags and seeds. The seed-42 row
     uses the shipped `models/detector_bundle`. The headline tables above are unchanged.
+    As a reproducibility check, each retrain lands near its original run: ROC-AUC and recall
+    within 0.2 points, and pooled test FPR within 0.64 points (seed 43: 3.55% → 4.19%; seed 44:
+    4.24% → 3.84%). FPR differences of under about half a point between runs are within retrain noise.
   - **Most of the July 6 excess appears to be mislabeled attack traffic, not benign drift.**
     `scripts/explain_false_positives.py` (seed 42) attributes 91.5% of July 6's 32,450 benign
     alerts to a single source, 192.168.10.8, the host compromised in the Infiltration attack.
