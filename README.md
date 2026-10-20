@@ -26,18 +26,15 @@ flowchart TD
   on benign July 4 traffic; use July 4 attack labels only to select among the fixed
   candidate set. After selection, freeze preprocessing, score, threshold, and
   suppression and evaluate July 5–7 once.
-- **UNSW-NB15 retrained (not yet run):** use the full time-bearing release and a global
-  chronological 60/20/20 split, with benign-only fitting and benign calibration.
-- **UNSW-NB15 zero-shot (not yet run):** apply the frozen CICIDS bundle and threshold
-  without any UNSW tuning. This is a stress test, not a selection input. The adapter and
-  scoring script are implemented and tested; no UNSW results are published.
 - Candidate selection maximizes macro attack-family recall at validation FPR ≤ 1%,
   breaking ties by precision and then p95 latency. Per-candidate latency is not
   measured, so that last tie-break is currently inactive (recorded as `null`); the
   shipped model's batch-1 latency is measured separately and reported below.
   Seeds are fixed at 42, 43, and 44.
 
-Both datasets are testbed traffic and should not be read as production performance.
+**Future work:** a zero-shot stress test on UNSW-NB15, applying the frozen CICIDS bundle and
+threshold with no UNSW tuning. The adapter (`datasets.py`) and `scripts/score_zero_shot_unsw.py`
+are implemented and tested, but no UNSW results exist yet.
 Large source datasets are ignored by Git; each run manifest records source SHA-256,
 row and label counts, exact temporal boundaries, configuration, seed, and environment.
 
@@ -48,49 +45,49 @@ All headline values use thresholds frozen on held-out benign calibration traffic
 
 | Dataset / experiment | Seeds | Recall | Macro family recall | Precision | F1 | Test FPR | Benign alerts / 10k | Batch-1 p95 latency (ms) |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| CICIDS2017 (cicids_days split) | 42, 43, 44 | 98.42 ± 1.09% | 67.54 ± 0.78% | 92.12 ± 0.52% | 95.16 ± 0.58% | 3.86 ± 0.28% | 386.18 ± 28.36 | 32.38 ± 2.99 |
+| CICIDS2017 (cicids_days split) | 42, 43, 44 | 95.37 ± 0.48% | 65.25 ± 0.39% | 91.60 ± 0.10% | 93.44 ± 0.22% | 4.01 ± 0.06% | 401.42 ± 5.98 | 29.13 ± 3.98 |
 
 **Per-attack-family recall: CICIDS2017 (cicids_days split)** (frozen threshold; mean ± std over runs)
 
 | Attack family | Test samples | Recall |
 |---|---:|---:|
-| DoS Hulk | 230,123 | 99.80 ± 0.08% |
-| PortScan | 158,804 | 99.75 ± 0.00% |
-| DDoS | 128,025 | 96.21 ± 4.47% |
-| DoS GoldenEye | 10,293 | 98.24 ± 0.32% |
-| DoS slowloris | 5,796 | 93.52 ± 1.71% |
-| DoS Slowhttptest | 5,499 | 96.91 ± 0.21% |
-| Bot | 1,952 | 0.44 ± 0.02% |
-| Web Attack – Brute Force | 1,507 | 92.02 ± 0.36% |
-| Web Attack – XSS | 652 | 91.10 ± 0.25% |
+| DoS Hulk | 230,123 | 99.22 ± 0.05% |
+| PortScan | 158,804 | 99.73 ± 0.00% |
+| DDoS | 128,025 | 85.12 ± 2.09% |
+| DoS GoldenEye | 10,293 | 95.83 ± 0.39% |
+| DoS slowloris | 5,796 | 82.62 ± 3.07% |
+| DoS Slowhttptest | 5,499 | 96.01 ± 0.10% |
+| Bot | 1,952 | 0.07 ± 0.02% |
+| Web Attack – Brute Force | 1,507 | 89.98 ± 0.90% |
+| Web Attack – XSS | 652 | 88.96 ± 0.66% |
 | Infiltration | 23 | 0.00 ± 0.00% |
 | Web Attack – Sql Injection | 21 | 0.00 ± 0.00% |
-| Heartbleed | 11 | 42.42 ± 4.29% |
+| Heartbleed | 11 | 45.45 ± 0.00% |
 
 **Candidate selection** (CICIDS2017 July 4 development labels only; each threshold at 1% development FPR)
 
 | Candidate | Macro family recall | Precision | Dev FPR |
 |---|---:|---:|---:|
 | transformer_nll | 0.00% | 0.00% | 1.00% |
-| equal_weight_combined (selected) | 84.86% | 76.27% | 1.00% |
+| equal_weight_combined (selected) | 73.94% | 74.11% | 1.00% |
 | multi_timescale | 0.00% | 0.00% | 1.00% |
-| isolation_forest | 0.13% | 0.46% | 1.00% |
+| isolation_forest | 0.15% | 0.54% | 1.00% |
 
 **Ablation** (seed 42 bundle; each score's threshold calibrated on July 4 benign traffic, applied unchanged to July 5–7)
 
 | Score | Recall | Macro family recall | Precision | Test FPR |
 |---|---:|---:|---:|---:|
-| combo_score | 96.88% | 66.45% | 92.09% | 3.70% |
-| combo_without_nll | 99.24% | 68.76% | 94.57% | 2.53% |
-| transformer_nll_z | 0.36% | 0.21% | 16.44% | 0.80% |
+| combo_score | 95.60% | 64.89% | 91.63% | 3.88% |
+| combo_without_nll | 97.83% | 67.89% | 93.99% | 2.78% |
+| transformer_nll_z | 2.73% | 0.99% | 64.73% | 0.66% |
 
 **Threshold drift** (seeds 42, 43, 44 bundles; mean ± std, `combo_score`; target FPR 1.00%; each day thresholded using earlier days only)
 
 | Threshold policy | Labels used | 07-05 FPR | 07-06 FPR | 07-07 FPR | Max daily FPR | Mean daily recall | Mean daily macro family recall |
 |---|---|---:|---:|---:|---:|---:|---:|
-| frozen | yes | 1.46 ± 0.06% | 7.86 ± 0.25% | 1.90 ± 0.23% | 7.86 ± 0.25% | 95.56 ± 0.75% | 65.82 ± 0.84% |
-| prev_day_benign | yes | 1.46 ± 0.06% | 6.47 ± 0.16% | 0.07 ± 0.00% | 6.47 ± 0.16% | 89.81 ± 0.02% | 61.59 ± 0.31% |
-| prev_day_unlabeled | no | 0.03 ± 0.00% | 0.00 ± 0.00% | 0.02 ± 0.00% | 0.03 ± 0.00% | 52.34 ± 0.29% | 34.07 ± 0.13% |
+| frozen | yes | 1.37 ± 0.05% | 8.41 ± 0.10% | 1.65 ± 0.24% | 8.41 ± 0.10% | 93.03 ± 0.41% | 63.40 ± 0.37% |
+| prev_day_benign | yes | 1.37 ± 0.05% | 7.13 ± 1.12% | 0.11 ± 0.00% | 7.13 ± 1.12% | 88.07 ± 0.37% | 59.89 ± 0.20% |
+| prev_day_unlabeled | no | 0.05 ± 0.00% | 0.00 ± 0.00% | 0.07 ± 0.00% | 0.07 ± 0.00% | 53.00 ± 0.29% | 34.42 ± 0.20% |
 
 Diagnostic ROC-derived TPR values, when present in artifacts, are not frozen-threshold results.
 <!-- RESULTS:END -->
@@ -107,63 +104,67 @@ published even when they are lower than earlier experiments.
   (Bot, Infiltration, SQL injection) are close to undetected. The macro family recall column
   weights every family equally and is the fairer single number. See the per-family table.
 - **The Transformer is not doing the detecting.** Its per-entity NLL z-score alone reaches
-  under 0.4% test recall at its frozen 1%-FPR threshold (ROC-AUC ≈ 0.70), and 0% macro family
+  2.7% test recall at its frozen 1%-FPR threshold (ROC-AUC ≈ 0.70), and 0% macro family
   recall on the development day. Detection comes from `combo_score`, a mean of robust z-scores
   over seven behavioral window features plus NLL as an eighth. The ablation table shows what
   removing the NLL feature does.
-- **The NLL feature hurts:** removing it raises macro family recall from 66.45% to 68.76%.
+- **The NLL feature hurts:** removing it raises macro family recall from 64.89% to 67.89%.
 - **The 1% FPR target does not hold on later days, and the miss is mostly one day.**
   Thresholds are calibrated on July 4 benign traffic; across July 5–7 the observed FPR is
-  about 3.9%. Split by day (threshold-drift table, mean of three seeds), July 5 and 7 land
-  near target (1.5%, 1.9%) and July 6 reaches 7.9%, where precision drops to about 6%. Nightly
-  recalibration does not fix it: retuning on the previous day's benign rows still gives 6.5% on
+  about 4.0%. Split by day (threshold-drift table, mean of three seeds), July 5 and 7 land
+  near target (1.4%, 1.7%) and July 6 reaches 8.4%, where precision drops to about 5%. Nightly
+  recalibration does not fix it: retuning on the previous day's benign rows still gives 7.1% on
   July 6, because July 6 does not look like July 5. Label-free retuning on all of the previous
   day's traffic holds FPR under 0.1%, but attack-heavy days push the threshold up and mean daily
-  recall falls from 96% to 52% (0% on July 6). Every seed shows the same pattern; the largest
-  per-day standard deviation is 0.25 points. A fixed false-positive budget needs either a
+  recall falls from 93% to 53% (0% on July 6). Every seed shows the same pattern. The frozen
+  threshold's largest per-day standard deviation is 0.24 points; the largest overall is 1.1
+  points (previous-day benign retuning on July 6). A fixed false-positive budget needs either a
   calibration window longer than one day or a per-entity baseline that adapts. A
   previous-day quantile is not enough.
-  - The drift table's seed-43 and seed-44 bundles are **retrains**. The original bundles
-    behind the published seed-43/44 headline metrics were not kept, and GPU training is not
-    bit-deterministic, so these are fresh runs with the same flags and seeds. The seed-42 row
-    uses the shipped `models/detector_bundle`. The headline tables above are unchanged.
-    As a reproducibility check, each retrain lands near its original run: ROC-AUC and recall
-    within 0.2 points, and pooled test FPR within 0.64 points (seed 43: 3.55% → 4.19%; seed 44:
-    4.24% → 3.84%). FPR differences of under about half a point between runs are within retrain noise.
   - **Most of the July 6 excess appears to be mislabeled attack traffic, not benign drift.**
-    `scripts/explain_false_positives.py` (seed 42) attributes 91.5% of July 6's 32,450 benign
+    `scripts/explain_false_positives.py` (seed 42) attributes 91.8% of July 6's 36,471 benign
     alerts to a single source, 192.168.10.8, the host compromised in the Infiltration attack.
-    Without that source, July 6's FPR is 0.81%, under target. The alerts land on internal hosts
-    (192.168.10.{14,15,50,5,9,16}) during parsed hour 3 (about 3 PM, the Infiltration window;
-    FPR 24.4% in that hour), driven by `dst_top_share` and NLL. This looks like the infected host's
-    internal port scan: .8 normally sends each of these hosts 40–70 flows an hour, but here it
-    sends tens of thousands, and only 36 rows are labeled Infiltration. CICIDS2017 is known to label
+    Without that source, July 6's FPR is 0.88%, under target. The alerts land on internal hosts
+    (192.168.10.{5,14,15,50,9,16}) in the 3 PM hour, the Infiltration window (FPR 26.7% in that
+    hour), driven by NLL and `dst_top_share`. This looks like the infected host's internal port
+    scan: .8 sends most of these hosts nothing for the rest of the day (192.168.10.50 gets 19–82
+    flows an hour), then 3,900–10,100 flows each in that hour. Only 36 rows in the whole dataset are
+    labeled Infiltration. CICIDS2017 is known to label
     much of that phase BENIGN (Engelen et al., 2021, *Troubleshooting an Intrusion Detection
     Dataset: the CICIDS2017 Case Study*). The published metrics keep the dataset's labels as they
     are, so July 6's FPR is probably overstated and its precision understated. July 5 and 7 show
-    ordinary concentration instead: one destination gets 42% (192.168.10.5) and 74% (172.16.0.1)
+    ordinary concentration instead: one destination gets 50% (192.168.10.5) and 64% (172.16.0.1)
     of the day's alerts. 172.16.0.1 is the firewall address and is cold-start, so it has no
     per-entity baseline.
-- **Known data bug: afternoon timestamps are out of order.** CICIDS2017 writes a 12-hour
-  clock with no AM/PM marker, and `cicids_to_clean.py` (and `cicids_into_clean.R`) parse it
-  as-is. The capture runs from about 8 AM to 5 PM, so afternoon flows parse as 01:00–07:59 and
-  sort *before* the morning flows of the same day. Day membership is unaffected, so the
-  train/development/test split is the same. The order within each day is not causal, though:
-  sequence windows, rolling entity features and the cold-start state see afternoon traffic
-  first. The fix (shift parsed hours 1–7 by +12h, with a test) is on branch
-  [`fix/cicids-12h-timestamps`](../../tree/fix/cicids-12h-timestamps). It is not merged
-  because it changes the dataset hash, so every published number would need to be rerun.
-  All results above use the uncorrected ordering. "Hour" in the analysis below means the
-  parsed hour, so hour 3 is about 3 PM.
+- **Fixed data bug: afternoon timestamps were out of order.** CICIDS2017 writes a 12-hour
+  clock with no AM/PM marker. Earlier versions of `cicids_to_clean.py` and
+  `cicids_into_clean.R` parsed it as-is, so afternoon flows (the capture runs from about 8 AM
+  to 5 PM) landed at 01:00–07:59 and sorted before the same day's morning flows. Both
+  converters now shift parsed hours 1–7 by +12h, which is covered by a test. Day membership did
+  not change, so the split is the same, but within-day order did. Every result in this README
+  has been rerun on the corrected data.
 - **Selection order.** The development-only candidate selection was run after the 3-seed test
   results were first published. It independently chose the same score (`equal_weight_combined`
-  is the bundle's `combo_score`) at the same threshold (4.29799 for seed 42), so the published
+  is the bundle's `combo_score`) at the same threshold (4.20982 for seed 42), so the published
   test numbers are the selected candidate's. The pre-registered order (select, then test) was
   not followed, though, and the selection was run on seed 42 only.
 - **Alert suppression is off.** A 300-second per-entity cooldown removes 99.97% of alerts but
   also about 97% of recall (most attacks arrive as dense bursts), so it is disabled by default.
 - **Testbed data.** CICIDS2017 is generated lab traffic. These numbers are not a claim about
   production performance.
+
+## Run the dashboard
+
+The trained model (`model.keras`, 28 MB) is not committed. Download it from the latest
+GitHub Release into the bundle directory, then start the API. The bundle checks the model's
+SHA-256 at startup.
+
+```bash
+python -m pip install -r requirements.txt
+curl -L -o models/detector_bundle/model.keras \
+  https://github.com/snoopy294/Log_Anomaly_Predictor/releases/latest/download/model.keras
+python backend.py   # or: make serve
+```
 
 ## Reproduce
 
@@ -178,31 +179,18 @@ Run the CICIDS protocol for each reference seed (large dataset and GPU required)
 
 ```bash
 python new.py --train_csv data/cicids_clean.csv --train_format clean \
-  --split_mode cicids_days --train_only_label BENIGN --seed 42 \
-  --seq_len 16 --step 1 --target_fpr 0.01 \
-  --out_dir outputs/runs/cicids2017/seed-42 \
-  --bundle_dir models/detector_bundle
+  --seq_len 16 --step 1 --min_events_per_entity 10 --split_mode cicids_days \
+  --dst_top_n 200 --bytes_num_buckets 8 --epochs 20 \
+  --train_only_label BENIGN --alert_score combo_score --target_fpr 0.01 --plot \
+  --seed 42 --out_dir outputs/runs/cicids2017/seed-42 \
+  --bundle_dir models/detector_bundle \
+  --best_model_path models/log_transformer.keras \
+  --history_csv outputs/runs/cicids2017/seed-42/training_history.csv
 ```
 
-The UNSW-NB15 runs below have not been run yet; the commands are kept for when the
-dataset is available. For retrained UNSW-NB15, use the full release containing `Stime`,
-`srcip`, and `dstip`:
-
-```bash
-python new.py --train_csv data/unsw_nb15_full.csv --train_format unsw \
-  --split_mode time --train_frac 0.60 --val_frac 0.20 \
-  --train_only_label BENIGN --seed 42 --target_fpr 0.01 \
-  --out_dir outputs/runs/unsw_nb15_retrained/seed-42
-```
-
-Repeat both retrained commands with seeds 43 and 44. Keep the CICIDS bundle unchanged
-for the zero-shot UNSW run:
-
-```bash
-python scripts/score_zero_shot_unsw.py --csv data/unsw_nb15_full.csv \
-  --bundle models/detector_bundle \
-  --out outputs/runs/unsw_nb15_zero_shot/cicids-frozen
-```
+For seeds 43 and 44, use `--seed 4x`, `--out_dir outputs/runs/cicids2017/seed-4x`,
+`--bundle_dir outputs/runs/bundles/seed-4x` and
+`--best_model_path outputs/runs/bundles/seed-4x/log_transformer.keras`.
 
 Select the winning score variant on the CICIDS development split (July 4) using a
 frozen bundle — this is the candidate-screening step referenced above, using
@@ -211,7 +199,7 @@ development labels only:
 ```bash
 python scripts/select_candidate.py --csv data/cicids_clean.csv \
   --bundle models/detector_bundle \
-  --out outputs/runs/candidate_selection/seed-42
+  --out outputs/runs/candidate_selection/seed-42-rerun
 ```
 
 Measure what the Transformer contributes by re-scoring development and test with the frozen
@@ -229,8 +217,7 @@ python scripts/threshold_drift.py --csv data/cicids_clean.csv \
   --bundle models/detector_bundle --out outputs/runs/threshold_drift/seed-42
 ```
 
-For seeds 43 and 44, retrain with `make train-cicids` flags plus `--seed 4x --bundle_dir
-outputs/runs/bundles/seed-4x`, then rerun the command above with that `--bundle` and
+For seeds 43 and 44, rerun it with `--bundle outputs/runs/bundles/seed-4x` and
 `--out outputs/runs/threshold_drift/seed-4x`.
 
 Break each test day's false positives down by entity, cold-start status, top feature, hour,
