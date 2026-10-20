@@ -42,9 +42,10 @@ def test_render_includes_families_selection_and_ablation():
             "macro_attack_family_recall": .6}}},
     }
     text = render(summary)
-    assert "50.00 ± 0.00%" in text
-    assert "33.70 ± 1.00" in text
-    assert "| Bot | 1,952 | 0.50 ± 0.00% |" in text
+    assert "| D | 42 | 80.00% | 50.00% |" in text
+    assert "| 33.70 |" in text
+    assert "| Bot | 1,952 | 0.50% |" in text
+    assert "± 0.00" not in text.split("Candidate selection")[0]
     assert text.index("| DDoS |") < text.index("| Bot |")
     assert "| equal_weight_combined (selected) | 84.86% | 76.27% | 1.00% |" in text
     assert "seed 42 bundle" in text

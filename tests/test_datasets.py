@@ -18,6 +18,14 @@ def test_unsw_mapping_and_benign_normalization():
     assert str(out["timestamp"].dt.tz) == "UTC"
 
 
+def test_unsw_merges_backdoors_spelling_into_backdoor():
+    raw = pd.DataFrame({"Stime": [1_500_000_000, 1_500_000_001], "dstip": ["d1", "d2"],
+                        "srcip": ["s1", "s2"], "proto": ["tcp", "tcp"],
+                        "dsport": [80, 80], "sbytes": [10, 20], "dbytes": [2, 3],
+                        "attack_cat": ["Backdoor", " Backdoors "], "label": [1, 1]})
+    assert adapt_unsw_nb15(raw)["Label"].tolist() == ["Backdoor", "Backdoor"]
+
+
 def test_unsw_rejects_non_time_bearing_release():
     with pytest.raises(ValueError, match="full-release columns"):
         adapt_unsw_nb15(pd.DataFrame({"proto": ["tcp"]}))

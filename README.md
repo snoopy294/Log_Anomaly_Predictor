@@ -31,10 +31,10 @@ flowchart TD
   measured, so that last tie-break is currently inactive (recorded as `null`); the
   shipped model's batch-1 latency is measured separately and reported below.
   Seeds are fixed at 42, 43, and 44.
+- **UNSW-NB15 zero-shot:** apply the frozen seed-42 CICIDS bundle and its threshold to the
+  full time-bearing UNSW-NB15 release (2.54M flows) with no UNSW tuning. This is a
+  transfer stress test, not a selection input. A UNSW-trained model is out of scope.
 
-**Future work:** a zero-shot stress test on UNSW-NB15, applying the frozen CICIDS bundle and
-threshold with no UNSW tuning. The adapter (`datasets.py`) and `scripts/score_zero_shot_unsw.py`
-are implemented and tested, but no UNSW results exist yet.
 Large source datasets are ignored by Git; each run manifest records source SHA-256,
 row and label counts, exact temporal boundaries, configuration, seed, and environment.
 
@@ -46,6 +46,7 @@ All headline values use thresholds frozen on held-out benign calibration traffic
 | Dataset / experiment | Seeds | Recall | Macro family recall | Precision | F1 | Test FPR | Benign alerts / 10k | Batch-1 p95 latency (ms) |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
 | CICIDS2017 (cicids_days split) | 42, 43, 44 | 95.37 ± 0.48% | 65.25 ± 0.39% | 91.60 ± 0.10% | 93.44 ± 0.22% | 4.01 ± 0.06% | 401.42 ± 5.98 | 29.13 ± 3.98 |
+| UNSW-NB15 zero-shot (frozen CICIDS seed 42) | frozen | 0.56% | 1.10% | 1.26% | 0.77% | 6.36% | 635.98 | n/a |
 
 **Per-attack-family recall: CICIDS2017 (cicids_days split)** (frozen threshold; mean ± std over runs)
 
@@ -63,6 +64,20 @@ All headline values use thresholds frozen on held-out benign calibration traffic
 | Infiltration | 23 | 0.00 ± 0.00% |
 | Web Attack – Sql Injection | 21 | 0.00 ± 0.00% |
 | Heartbleed | 11 | 45.45 ± 0.00% |
+
+**Per-attack-family recall: UNSW-NB15 zero-shot (frozen CICIDS seed 42)** (frozen threshold; single run)
+
+| Attack family | Test samples | Recall |
+|---|---:|---:|
+| Generic | 215,470 | 0.05% |
+| Exploits | 44,437 | 1.56% |
+| Fuzzers | 24,245 | 2.62% |
+| DoS | 16,339 | 1.32% |
+| Reconnaissance | 13,952 | 0.84% |
+| Analysis | 2,677 | 0.34% |
+| Backdoor | 2,329 | 0.90% |
+| Shellcode | 1,503 | 0.00% |
+| Worms | 174 | 2.30% |
 
 **Candidate selection** (CICIDS2017 July 4 development labels only; each threshold at 1% development FPR)
 
@@ -148,10 +163,17 @@ published even when they are lower than earlier experiments.
   is the bundle's `combo_score`) at the same threshold (4.20982 for seed 42), so the published
   test numbers are the selected candidate's. The pre-registered order (select, then test) was
   not followed, though, and the selection was run on seed 42 only.
+- **The detector does not transfer to another network.** On UNSW-NB15, the frozen seed-42
+  bundle catches 0.56% of attacks (1.10% macro family recall) while flagging 6.36% of benign
+  flows, so precision is 1.3%. Vocabulary is not the problem: every UNSW event maps to a known
+  CICIDS port-class token (unknown-token rate 0%). The scores still rank somewhat (ROC-AUC 0.74),
+  but a threshold calibrated on CICIDS benign traffic means nothing on a different network's
+  baseline. The CICIDS results above describe a detector calibrated on its own network, and any
+  new deployment needs its own benign calibration window at least.
 - **Alert suppression is off.** A 300-second per-entity cooldown removes 99.97% of alerts but
   also about 97% of recall (most attacks arrive as dense bursts), so it is disabled by default.
-- **Testbed data.** CICIDS2017 is generated lab traffic. These numbers are not a claim about
-  production performance.
+- **Testbed data.** CICIDS2017 and UNSW-NB15 are generated lab traffic. These numbers are not a
+  claim about production performance.
 
 ## Run the dashboard
 
@@ -228,6 +250,21 @@ python scripts/explain_false_positives.py --csv data/cicids_clean.csv \
   --bundle models/detector_bundle --out outputs/runs/false_positives/seed-42
 ```
 
+For the UNSW-NB15 zero-shot test, download `UNSW-NB15_1.csv` … `UNSW-NB15_4.csv` and
+`NUSW-NB15_features.csv` from the CSV folder linked on the
+[UNSW-NB15 project page](https://research.unsw.edu.au/projects/unsw-nb15-dataset) (the host blocks
+scripted downloads), put them in `data/raw_unsw/`, then assemble and score:
+
+```bash
+python scripts/assemble_unsw_full.py --raw_dir data/raw_unsw --out data/unsw_nb15_full.csv
+python scripts/score_zero_shot_unsw.py --csv data/unsw_nb15_full.csv \
+  --bundle models/detector_bundle --out outputs/runs/unsw_nb15_zero_shot/cicids-frozen
+```
+
+Under WSL, if TensorFlow logs "Cannot dlopen some GPU libraries" and falls back to the CPU,
+add the pip-installed cuSOLVER to the library path:
+`export LD_LIBRARY_PATH=$CONDA_PREFIX/lib/python3.11/site-packages/nvidia/cusolver/lib`.
+
 Consolidate reviewed artifacts into the README data source:
 
 ```bash
@@ -235,6 +272,7 @@ python scripts/consolidate_benchmarks.py \
   --run "CICIDS2017 (cicids_days split)=outputs/runs/cicids2017/seed-42/metrics_summary.json" \
   --run "CICIDS2017 (cicids_days split)=outputs/runs/cicids2017/seed-43/metrics_summary.json" \
   --run "CICIDS2017 (cicids_days split)=outputs/runs/cicids2017/seed-44/metrics_summary.json" \
+  --run "UNSW-NB15 zero-shot (frozen CICIDS seed 42)=outputs/runs/unsw_nb15_zero_shot/cicids-frozen/metrics.json" \
   --selection outputs/runs/candidate_selection/seed-42-rerun/candidate_selection.json \
   --ablation outputs/runs/ablation/seed-42/ablation.json \
   --drift outputs/runs/threshold_drift/seed-42/threshold_drift.json \

@@ -71,6 +71,8 @@ def adapt_unsw_nb15(df: pd.DataFrame, *, drop_malformed: bool = True,
         "bytes": sbytes + dbytes,
         "Label": [normalize_label(a, n) for a, n in zip(attack, numeric)],
     })
+    # The full release spells one family two ways; count it once in macro recall.
+    out["Label"] = out["Label"].replace({"Backdoors": "Backdoor"})
     malformed = (out["timestamp"].isna() | out["entity_id"].isna() |
                  out["dst_id"].isna() | proto.isna() | dsport.isna() |
                  out["bytes"].isna())

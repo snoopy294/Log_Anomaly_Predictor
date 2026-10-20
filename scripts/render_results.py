@@ -17,6 +17,13 @@ def _mean_std(value: dict, percent=False) -> str:
     return f"{value['mean'] * scale:.2f} ± {value.get('std', 0) * scale:.2f}{suffix}"
 
 
+def _cell(value: dict, percent=False, single=False) -> str:
+    """mean ± std over runs, or the plain value when there is only one run."""
+    if not single or not isinstance(value, dict) or "mean" not in value:
+        return _mean_std(value, percent)
+    return f"{value['mean'] * (100 if percent else 1):.2f}{'%' if percent else ''}"
+
+
 def _pct(value) -> str:
     return "n/a" if value is None else f"{value * 100:.2f}%"
 
@@ -25,10 +32,12 @@ def _family_lines(name: str, result: dict) -> list[str]:
     families = result.get("per_family", {})
     if not families:
         return []
-    lines = ["", f"**Per-attack-family recall: {name}** (frozen threshold; mean ± std over runs)", "",
+    single = len(result.get("seeds", [])) == 1
+    note = "single run" if single else "mean ± std over runs"
+    lines = ["", f"**Per-attack-family recall: {name}** (frozen threshold; {note})", "",
              "| Attack family | Test samples | Recall |", "|---|---:|---:|"]
     for family, stats in sorted(families.items(), key=lambda item: -item[1]["sample_count"]):
-        lines.append(f"| {family} | {stats['sample_count']:,} | {_mean_std(stats, True)} |")
+        lines.append(f"| {family} | {stats['sample_count']:,} | {_cell(stats, True, single)} |")
     return lines
 
 
@@ -85,14 +94,16 @@ def render(summary: dict) -> str:
              "|---|---:|---:|---:|---:|---:|---:|---:|---:|"]
     for name, result in datasets.items():
         aggregate = result.get("aggregate", {})
+        single = len(result.get("seeds", [])) == 1
         lines.append("| " + " | ".join([
             name, ", ".join(map(str, result.get("seeds", []))) or "n/a",
-            _mean_std(aggregate.get("recall"), True),
-            _mean_std(aggregate.get("macro_attack_family_recall"), True),
-            _mean_std(aggregate.get("precision"), True),
-            _mean_std(aggregate.get("f1"), True), _mean_std(aggregate.get("observed_test_fpr"), True),
-            _mean_std(aggregate.get("benign_alerts_per_10000_events")),
-            _mean_std(aggregate.get("batch_one_p95_ms")),
+            _cell(aggregate.get("recall"), True, single),
+            _cell(aggregate.get("macro_attack_family_recall"), True, single),
+            _cell(aggregate.get("precision"), True, single),
+            _cell(aggregate.get("f1"), True, single),
+            _cell(aggregate.get("observed_test_fpr"), True, single),
+            _cell(aggregate.get("benign_alerts_per_10000_events"), single=single),
+            _cell(aggregate.get("batch_one_p95_ms"), single=single),
         ]) + " |")
     for name, result in datasets.items():
         lines += _family_lines(name, result)

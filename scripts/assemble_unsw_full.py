@@ -34,8 +34,10 @@ def assemble(raw_dir: Path, out_csv: Path) -> int:
     if missing:
         raise ValueError(f"feature list is missing required columns: {missing}")
     frames = [pd.read_csv(raw_dir / part, header=None, names=names, low_memory=False,
-                          encoding="latin-1") for part in PARTS]
+                          encoding="latin-1", dtype={names[0]: str}) for part in PARTS]
     full = pd.concat(frames, ignore_index=True)
+    # UNSW-NB15_1.csv starts with a UTF-8 BOM, which latin-1 decodes as "ï»¿".
+    full[names[0]] = full[names[0]].str.removeprefix("ï»¿")
     out_csv.parent.mkdir(parents=True, exist_ok=True)
     full.to_csv(out_csv, index=False)
     return len(full)

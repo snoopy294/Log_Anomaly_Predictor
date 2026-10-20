@@ -344,6 +344,158 @@
           "artifact": "outputs/runs/cicids2017/seed-44/metrics_summary.json"
         }
       ]
+    },
+    "UNSW-NB15 zero-shot (frozen CICIDS seed 42)": {
+      "seeds": [
+        "frozen"
+      ],
+      "aggregate": {
+        "recall": {
+          "mean": 0.0055928202636971154,
+          "std": 0.0
+        },
+        "precision": {
+          "mean": 0.01257095661060132,
+          "std": 0.0
+        },
+        "f1": {
+          "mean": 0.007741462731279432,
+          "std": 0.0
+        },
+        "observed_test_fpr": {
+          "mean": 0.06359804832483319,
+          "std": 0.0
+        },
+        "benign_alerts_per_10000_events": {
+          "mean": 635.9804832483319,
+          "std": 0.0
+        },
+        "macro_attack_family_recall": {
+          "mean": 0.011019128919969997,
+          "std": 0.0
+        }
+      },
+      "per_family": {
+        "Analysis": {
+          "mean": 0.0033619723571162163,
+          "std": 0.0,
+          "n_runs": 1,
+          "sample_count": 2677
+        },
+        "Backdoor": {
+          "mean": 0.009016745384285096,
+          "std": 0.0,
+          "n_runs": 1,
+          "sample_count": 2329
+        },
+        "DoS": {
+          "mean": 0.013158700042842253,
+          "std": 0.0,
+          "n_runs": 1,
+          "sample_count": 16339
+        },
+        "Exploits": {
+          "mean": 0.015550104642527596,
+          "std": 0.0,
+          "n_runs": 1,
+          "sample_count": 44437
+        },
+        "Fuzzers": {
+          "mean": 0.02623221282738708,
+          "std": 0.0,
+          "n_runs": 1,
+          "sample_count": 24245
+        },
+        "Generic": {
+          "mean": 0.0004780247830324935,
+          "std": 0.0,
+          "n_runs": 1,
+          "sample_count": 215470
+        },
+        "Reconnaissance": {
+          "mean": 0.008385894495412827,
+          "std": 0.0,
+          "n_runs": 1,
+          "sample_count": 13952
+        },
+        "Shellcode": {
+          "mean": 0.0,
+          "std": 0.0,
+          "n_runs": 1,
+          "sample_count": 1503
+        },
+        "Worms": {
+          "mean": 0.02298850574712641,
+          "std": 0.0,
+          "n_runs": 1,
+          "sample_count": 174
+        }
+      },
+      "runs": [
+        {
+          "seed": "frozen",
+          "frozen_operating_point": {
+            "threshold": 4.209820992090631,
+            "calibration_population": {
+              "dataset": "CICIDS2017",
+              "bundle_model_version": "1"
+            },
+            "confusion": {
+              "tp": 1796,
+              "fp": 141073,
+              "tn": 2077124,
+              "fn": 319330
+            },
+            "recall": 0.0055928202636971154,
+            "tpr": 0.0055928202636971154,
+            "precision": 0.01257095661060132,
+            "f1": 0.007741462731279432,
+            "observed_test_fpr": 0.06359804832483319,
+            "benign_alerts_per_10000_events": 635.9804832483319
+          },
+          "macro_attack_family_recall": 0.011019128919969997,
+          "per_family": {
+            "Analysis": {
+              "sample_count": 2677,
+              "recall": 0.0033619723571162163
+            },
+            "Backdoor": {
+              "sample_count": 2329,
+              "recall": 0.009016745384285096
+            },
+            "DoS": {
+              "sample_count": 16339,
+              "recall": 0.013158700042842253
+            },
+            "Exploits": {
+              "sample_count": 44437,
+              "recall": 0.015550104642527596
+            },
+            "Fuzzers": {
+              "sample_count": 24245,
+              "recall": 0.02623221282738708
+            },
+            "Generic": {
+              "sample_count": 215470,
+              "recall": 0.0004780247830324935
+            },
+            "Reconnaissance": {
+              "sample_count": 13952,
+              "recall": 0.008385894495412827
+            },
+            "Shellcode": {
+              "sample_count": 1503,
+              "recall": 0.0
+            },
+            "Worms": {
+              "sample_count": 174,
+              "recall": 0.02298850574712641
+            }
+          },
+          "batch_one_p95_ms": null,
+          "artifact": "outputs/runs/unsw_nb15_zero_shot/cicids-frozen/metrics.json"
+        }
+      ]
     }
   },
   "selection": {

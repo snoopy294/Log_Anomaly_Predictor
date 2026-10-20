@@ -30,3 +30,13 @@ def test_assemble_rejects_wrong_feature_count(tmp_path):
     _write_raw(tmp_path, _names()[:-1])
     with pytest.raises(ValueError, match="49"):
         assemble(tmp_path, tmp_path / "out.csv")
+
+
+def test_assemble_strips_utf8_bom_from_first_field(tmp_path):
+    names = _names()
+    _write_raw(tmp_path, names)
+    part = tmp_path / "UNSW-NB15_1.csv"
+    part.write_bytes(b"\xef\xbb\xbf" + part.read_bytes())
+    out = tmp_path / "out.csv"
+    assemble(tmp_path, out)
+    assert str(pd.read_csv(out)[names[0]].iloc[0]) == "0"

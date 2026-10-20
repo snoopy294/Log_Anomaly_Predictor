@@ -55,4 +55,6 @@ outputs/alert_packets/
 data/cicids*.csv
 data/unsw*.csv
 data/raw_unsw/
+data/NB15/
+data/NB15.zip
 outputs/runs/
