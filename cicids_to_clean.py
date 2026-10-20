@@ -22,8 +22,7 @@ Field semantics are translated line-for-line from cicids_into_clean.R:
   94-101's original Source-IP mapping) so that per-entity anomaly
   baselines are built from a host's own traffic history, which has a
   genuine benign period, rather than from a single attacker machine's
-  history, which does not. See
-  docs/superpowers/specs/2026-09-10-cicids-destination-centric-entity-design.md.
+  history, which does not.
 - timestamp parsed to UTC ISO-8601 "%Y-%m-%dT%H:%M:%SZ" (R lines 35-45, 105).
 - Column names are whitespace-trimmed first (R line 64: raw CICIDS CSVs have
   leading spaces like " Source IP").
