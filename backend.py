@@ -33,8 +33,27 @@ from model import (
 )
 from detector_bundle import DetectorRuntime, load_detector_bundle
 
+DEFAULT_CORS_ORIGINS = "http://localhost:5000,http://127.0.0.1:5000"
+
+
+def cors_origins_from_env(environ=os.environ) -> List[str]:
+    """Comma-separated CORS_ORIGINS, defaulting to the local dashboard only."""
+    raw = environ.get("CORS_ORIGINS", DEFAULT_CORS_ORIGINS)
+    return [o.strip() for o in raw.split(",") if o.strip()]
+
+
+def server_settings_from_env(environ=os.environ) -> Dict:
+    """Host/port/debug for app.run. Defaults: loopback only, debug off.
+    Debug is enabled only by an explicit FLASK_DEBUG=1/true/yes/on."""
+    return {
+        "host": environ.get("HOST", "127.0.0.1"),
+        "port": int(environ.get("PORT", "5000")),
+        "debug": environ.get("FLASK_DEBUG", "").strip().lower() in {"1", "true", "yes", "on"},
+    }
+
+
 app = Flask(__name__)
-CORS(app)  # Enable CORS for React frontend
+CORS(app, origins=cors_origins_from_env())
 
 # Global model and configuration
 MODEL = None
@@ -463,7 +482,10 @@ def explain_anomaly():
         
         if not entity_id:
             return jsonify({"error": "entity_id is required"}), 400
-            
+
+        if MODEL is None or MODEL_META is None:
+            return jsonify({"error": "Model not loaded"}), 503
+
         buffer = get_entity_buffer(entity_id)
         seq_len = MODEL_META.get("seq_len", 64)
         
@@ -593,15 +615,11 @@ if __name__ == '__main__':
     # Load model
     load_model_and_config()
     
+    settings = server_settings_from_env()
     print("\n+ Server ready!")
-    print(f"+ Dashboard: http://localhost:5000")
-    print(f"+ API: http://localhost:5000/api/health")
+    print(f"+ Dashboard: http://{settings['host']}:{settings['port']}")
+    print(f"+ API: http://{settings['host']}:{settings['port']}/api/health")
+    print(f"+ Debug: {'ON' if settings['debug'] else 'off'}")
     print("\n" + "=" * 60)
-    
-    # Run Flask app
-    app.run(
-        host='0.0.0.0',
-        port=5000,
-        debug=True,
-        threaded=True
-    )
+
+    app.run(threaded=True, **settings)

@@ -16,6 +16,7 @@ import os
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
 import json
 import argparse
+import threading
 import numpy as np
 import pandas as pd
 import tensorflow as tf
@@ -243,32 +244,75 @@ def build_improved_transformer_model(
 # EXPLAINABILITY
 # ============================================
 
-def get_important_events(model: keras.Model, X: np.ndarray, seq_idx: int = 0):
-    """Get most important events in a sequence using gradient-based attribution"""
-    X_single = X[seq_idx:seq_idx+1]
-    
-    with tf.GradientTape() as tape:
-        # Convert to tensor and watch
-        X_tensor = tf.constant(X_single, dtype=tf.float32)
-        tape.watch(X_tensor)
-        
-        # Get embeddings
-        emb_layer = model.get_layer("tok_emb")
-        embeddings = emb_layer(X_single)
-        
-        # Forward pass through rest of model
-        # This is simplified - in practice you'd need the full forward pass
-        predictions = model(X_single)
-        pred_class = tf.argmax(predictions[0])
-        pred_score = predictions[0, pred_class]
-    
-    # Get gradients
+class _InjectableEmbedding(layers.Layer):
+    """Stands in for a model's "tok_emb" layer inside an explain-only clone.
+
+    Normally it just delegates to the original Embedding (same weights). While
+    ``override`` is set, it returns that tensor instead, so the rest of the
+    graph runs on an embedding the caller computed and is watching on a tape.
+    The padding mask still comes from the token ids via the inner layer, so
+    masking behaves exactly as in the original model.
+    """
+
+    def __init__(self, inner: layers.Embedding, **kwargs):
+        super().__init__(name=inner.name, **kwargs)
+        self.inner = inner
+        self.override = None
+        self.supports_masking = True
+
+    def call(self, x):
+        return self.override if self.override is not None else self.inner(x)
+
+    def compute_mask(self, x, mask=None):
+        return self.inner.compute_mask(x, mask)
+
+
+# One explain clone per live model. The clone shares every weight with the
+# original; only the clone's embedding wrapper is ever mutated, under a lock,
+# so concurrent scoring through the original model is never affected.
+_EXPLAIN_CACHE: dict = {"model": None, "clone": None}
+_EXPLAIN_LOCK = threading.Lock()
+
+
+def _explain_clone(model: keras.Model) -> keras.Model:
+    if _EXPLAIN_CACHE["model"] is not model:
+        _EXPLAIN_CACHE["clone"] = keras.models.clone_model(
+            model,
+            clone_function=lambda layer: _InjectableEmbedding(layer)
+            if layer.name == "tok_emb" else layer,
+        )
+        _EXPLAIN_CACHE["model"] = model
+    return _EXPLAIN_CACHE["clone"]
+
+
+def get_important_events(model: keras.Model, X: np.ndarray, seq_idx: int = 0) -> np.ndarray:
+    """Per-position importance for the model's top next-event prediction.
+
+    Saliency = L1 norm over d_model of d(top-class probability)/d(token
+    embedding). The embedding is computed inside the tape and fed to the rest
+    of the network, so the gradient is taken through the real forward pass.
+    Works for any functional model whose token embedding layer is "tok_emb".
+    Returns a float array of shape (seq_len,).
+    """
+    X_single = np.asarray(X[seq_idx:seq_idx + 1], dtype=np.int32)
+
+    with _EXPLAIN_LOCK:
+        clone = _explain_clone(model)
+        injectable = clone.get_layer("tok_emb")
+        with tf.GradientTape() as tape:
+            embeddings = tf.convert_to_tensor(injectable.inner(X_single))
+            tape.watch(embeddings)
+            injectable.override = embeddings
+            try:
+                predictions = clone(X_single, training=False)
+            finally:
+                injectable.override = None
+            pred_score = tf.reduce_max(predictions[0])
+
     gradients = tape.gradient(pred_score, embeddings)
-    
-    # Compute importance scores (gradient * input)
-    importance = tf.reduce_sum(tf.abs(gradients), axis=-1).numpy()
-    
-    return importance[0]
+    if gradients is None:
+        raise RuntimeError("attribution gradient is None; tok_emb is not on the prediction path")
+    return tf.reduce_sum(tf.abs(gradients), axis=-1).numpy()[0]
 
 
 if __name__ == "__main__":
